@@ -12,7 +12,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
       END AS can_edit,
       tabs.cloned_from_tab_id,
       cloned_from.name AS cloned_from_tab_name,
-      tabs.layout_json,
       tabs.created_at,
       tabs.updated_at
     FROM tabs

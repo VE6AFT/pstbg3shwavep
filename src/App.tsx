@@ -197,6 +197,7 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
     clonedFromName: tab.clonedFromName ?? null,
     baseSvgMarkup: tab.baseSvgMarkup ?? null,
     canEdit: tab.canEdit ?? false,
+    hasLayout: tab.hasLayout ?? true,
     layout: {
       ...tab.layout,
       bays: BAY_LAYOUT.map((bay) => ({ ...bay })),
@@ -276,6 +277,16 @@ async function fetchTabs(authorId: string) {
   return (await response.json()) as { tabs: LayoutTab[] };
 }
 
+async function fetchTab(tabId: string, authorId: string) {
+  const response = await fetch(`/api/tabs/${tabId}`, {
+    headers: { "X-Author-Id": authorId },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load tab: ${response.status}`);
+  }
+  return (await response.json()) as SaveResponse;
+}
+
 async function saveTab(tab: LayoutTab, authorId: string) {
   const response = await fetch(`/api/tabs/${tab.id}`, {
     method: "PUT",
@@ -331,6 +342,20 @@ function loadCachedTabs() {
   } catch {
     return null;
   }
+}
+
+function mergeTabSummaries(summaries: LayoutTab[], currentTabs: LayoutTab[]) {
+  return summaries.map((summary, index) => {
+    const normalized = normalizeTab(summary, index);
+    const current = currentTabs.find((tab) => tab.id === normalized.id);
+    if (!current || current.hasLayout === false || current.updatedAt !== normalized.updatedAt) return normalized;
+    return {
+      ...normalized,
+      baseSvgMarkup: current.baseSvgMarkup ?? normalized.baseSvgMarkup,
+      layout: current.layout,
+      hasLayout: true,
+    };
+  });
 }
 
 function loadActiveTabId(tabs?: LayoutTab[]) {
@@ -475,13 +500,14 @@ function App() {
   const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const activeTabHasLayout = activeTab?.hasLayout !== false;
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
-  const selectedTool = activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null;
+  const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
   const baseSvgDataUrl = activeTab.baseSvgMarkup
     ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(activeTab.baseSvgMarkup)}`
     : null;
 
-  const canEdit = showDebug || activeTab.canEdit === true || activeTab.authorId === localUserId;
+  const canEdit = activeTabHasLayout && (showDebug || activeTab.canEdit === true || activeTab.authorId === localUserId);
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -629,7 +655,7 @@ function App() {
     fetchTabs(localUserId)
       .then(({ tabs: remoteTabs }) => {
         if (remoteTabs.length === 0) return;
-        const normalized = orderTabs(remoteTabs.map(normalizeTab));
+        const normalized = orderTabs(mergeTabSummaries(remoteTabs, tabsRef.current));
         setTabs(normalized);
         setActiveTabId((current) => {
           const savedTabId = loadActiveTabId(normalized);
@@ -651,6 +677,35 @@ function App() {
   }, [localUserId, pushDebugEvent]);
 
   useEffect(() => {
+    const tab = tabs.find((item) => item.id === activeTabId);
+    if (!tab || tab.hasLayout !== false) return;
+
+    let cancelled = false;
+    setSyncState("saving");
+    setSyncMessage("Loading tab layout");
+    fetchTab(tab.id, localUserId)
+      .then(({ tab: loaded }) => {
+        if (cancelled) return;
+        setTabs((current) =>
+          orderTabs(current.map((item) => (item.id === loaded.id ? normalizeTab({ ...loaded, hasLayout: true }) : item))),
+        );
+        setSyncState("saved");
+        setSyncMessage("Loaded tab layout");
+        pushDebugEvent("tab layout loaded");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSyncState("offline");
+        setSyncMessage(isLocalhost ? "localhost draft" : "Unable to load tab layout");
+        pushDebugEvent("tab layout load failed");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTabId, isLocalhost, localUserId, pushDebugEvent, tabs]);
+
+  useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
 
@@ -670,10 +725,13 @@ function App() {
         window.clearTimeout(localWriteTimer.current);
       }
       localWriteTimer.current = window.setTimeout(() => {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify(orderTabs(tabsRef.current.map(normalizeTab))),
-        );
+        const hydratedTabs = tabsRef.current.filter((tab) => tab.hasLayout !== false);
+        if (hydratedTabs.length > 0) {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(orderTabs(hydratedTabs.map(normalizeTab))),
+          );
+        }
         localWriteTimer.current = null;
       }, LOCAL_WRITE_DELAY_MS);
     }
@@ -928,7 +986,23 @@ function App() {
   }, [activeTab, draggingToolId, selectedTool, tabs]);
 
   const handleCloneTab = async (source: LayoutTab) => {
-    const clone = { ...cloneLayoutTab(source), authorId: localUserId };
+    let sourceTab = source;
+    if (sourceTab.hasLayout === false) {
+      setSyncState("saving");
+      setSyncMessage("Loading tab before clone");
+      try {
+        const { tab } = await fetchTab(sourceTab.id, localUserId);
+        sourceTab = normalizeTab({ ...tab, hasLayout: true });
+        setTabs((current) => orderTabs(current.map((item) => (item.id === sourceTab.id ? sourceTab : item))));
+      } catch {
+        setSyncState("offline");
+        setSyncMessage("Unable to load tab before clone");
+        pushDebugEvent("clone source load failed");
+        return;
+      }
+    }
+
+    const clone = { ...cloneLayoutTab(sourceTab), authorId: localUserId, hasLayout: true };
     setTabs((current) => orderTabs([...current, clone]));
     setActiveTabId(clone.id);
     setSelectedToolId(null);
@@ -953,7 +1027,7 @@ function App() {
       if (err instanceof LimitError) {
         // Roll back the optimistic add — limit hit server-side
         setTabs((current) => current.filter((t) => t.id !== clone.id));
-        setActiveTabId(source.id);
+        setActiveTabId(sourceTab.id);
         setSyncState("error");
         setSyncMessage(err.message);
         pushDebugEvent(`clone rejected: ${err.message}`);

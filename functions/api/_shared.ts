@@ -52,6 +52,7 @@ export type LayoutTab = {
   name: string;
   authorId?: string | null;
   canEdit?: boolean;
+  hasLayout?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
   baseSvgMarkup?: string | null;
@@ -67,7 +68,7 @@ export type TabRow = {
   can_edit?: number | boolean | null;
   cloned_from_tab_id: string | null;
   cloned_from_tab_name: string | null;
-  layout_json: string;
+  layout_json?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -97,6 +98,7 @@ export const VALIDATION_LIMITS = {
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const TEXT_ENCODER = new TextEncoder();
+const EMPTY_LAYOUT: Layout = { unit: "in", bays: [], tools: [] };
 const ALLOWED_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
   "undefined",
   "automotive",
@@ -156,12 +158,14 @@ export function readAuthorIdHeader(request: Request) {
 }
 
 export function readLayoutTab(row: TabRow): LayoutTab {
+  const hasLayout = typeof row.layout_json === "string";
   const tab: LayoutTab = {
     id: row.id,
     name: row.name,
     clonedFromId: row.cloned_from_tab_id,
     clonedFromName: row.cloned_from_tab_name,
-    layout: JSON.parse(row.layout_json) as Layout,
+    hasLayout,
+    layout: hasLayout ? JSON.parse(row.layout_json as string) as Layout : EMPTY_LAYOUT,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

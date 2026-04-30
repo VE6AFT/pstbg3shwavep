@@ -2,12 +2,43 @@ import {
   json,
   publicLayoutTab,
   readAuthorIdHeader,
+  readLayoutTab,
   parseLayoutTabRequest,
   validationErrorResponse,
   ValidationError,
   type Env,
   type LayoutTab,
+  type TabRow,
 } from "../_shared";
+
+export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
+  const authorId = readAuthorIdHeader(request);
+  const row = await env.DB.prepare(
+    `SELECT
+      tabs.id,
+      tabs.name,
+      CASE
+        WHEN tabs.author_id IS NOT NULL AND tabs.author_id = ? THEN 1
+        ELSE 0
+      END AS can_edit,
+      tabs.cloned_from_tab_id,
+      cloned_from.name AS cloned_from_tab_name,
+      tabs.layout_json,
+      tabs.created_at,
+      tabs.updated_at
+    FROM tabs
+    LEFT JOIN tabs AS cloned_from ON cloned_from.id = tabs.cloned_from_tab_id
+    WHERE tabs.id = ?`,
+  )
+    .bind(authorId, params.id)
+    .first<TabRow>();
+
+  if (!row) {
+    return json({ error: "Tab not found" }, { status: 404 });
+  }
+
+  return json({ tab: publicLayoutTab(readLayoutTab(row)) });
+};
 
 export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
   try {
