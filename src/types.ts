@@ -1,0 +1,60 @@
+export type Bay = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ToolShape = {
+  id: string;
+  assetId: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  color: string;
+  scope?:
+    | "undefined"
+    | "automotive"
+    | "blue"
+    | "electronics"
+    | "glass/clay"
+    | "green"
+    | "lasers"
+    | "media/vinyl/art"
+    | "metal"
+    | "plastics"
+    | "red"
+    | "social"
+    | "software/it"
+    | "textiles/leather"
+    | "training"
+    | "wood";
+  hazards?: Array<"dust" | "noise" | "dirt" | "wet" | "fire" | "eyes">;
+};
+
+export type Layout = {
+  unit: "in";
+  bays: Bay[];
+  tools: ToolShape[];
+};
+
+export type LayoutTab = {
+  id: string;
+  name: string;
+  authorId?: string | null;
+  clonedFromId?: string | null;
+  clonedFromName?: string | null;
+  baseSvgMarkup?: string | null;
+  layout: Layout;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type SaveResponse = {
+  tab: LayoutTab;
+};

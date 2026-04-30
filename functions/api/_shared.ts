@@ -1,0 +1,404 @@
+export type Env = {
+  DB: D1Database;
+};
+
+export type Bay = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ToolShape = {
+  id: string;
+  assetId: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  color: string;
+  scope?:
+    | "undefined"
+    | "automotive"
+    | "blue"
+    | "electronics"
+    | "glass/clay"
+    | "green"
+    | "lasers"
+    | "media/vinyl/art"
+    | "metal"
+    | "plastics"
+    | "red"
+    | "social"
+    | "software/it"
+    | "textiles/leather"
+    | "training"
+    | "wood";
+  hazards?: Array<"dust" | "noise" | "dirt" | "wet" | "fire" | "eyes">;
+};
+
+export type Layout = {
+  unit: "in";
+  bays: Bay[];
+  tools: ToolShape[];
+};
+
+export type LayoutTab = {
+  id: string;
+  name: string;
+  authorId?: string | null;
+  clonedFromId?: string | null;
+  clonedFromName?: string | null;
+  baseSvgMarkup?: string | null;
+  layout: Layout;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TabRow = {
+  id: string;
+  name: string;
+  author_id: string | null;
+  cloned_from_tab_id: string | null;
+  cloned_from_tab_name: string | null;
+  layout_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export const VALIDATION_LIMITS = {
+  requestBytes: 256 * 1024,
+  tabIdChars: 96,
+  authorIdChars: 128,
+  tabNameChars: 80,
+  bayIdChars: 96,
+  bayLabelChars: 80,
+  toolIdChars: 96,
+  toolAssetIdChars: 128,
+  toolNameChars: 80,
+  baseSvgMarkupChars: 128 * 1024,
+  baysPerTab: 50,
+  toolsPerTab: 500,
+  minCoordinate: -100000,
+  maxCoordinate: 100000,
+  minSize: 0.01,
+  maxSize: 100000,
+  minRotation: -36000,
+  maxRotation: 36000,
+  hazardsPerTool: 6,
+} as const;
+
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const TEXT_ENCODER = new TextEncoder();
+const ALLOWED_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
+  "undefined",
+  "automotive",
+  "blue",
+  "electronics",
+  "glass/clay",
+  "green",
+  "lasers",
+  "media/vinyl/art",
+  "metal",
+  "plastics",
+  "red",
+  "social",
+  "software/it",
+  "textiles/leather",
+  "training",
+  "wood",
+]);
+const ALLOWED_HAZARDS = new Set<NonNullable<ToolShape["hazards"]>[number]>([
+  "dust",
+  "noise",
+  "dirt",
+  "wet",
+  "fire",
+  "eyes",
+]);
+
+type ValidationOptions = {
+  root?: "tab" | "body";
+};
+
+export class ValidationError extends Error {
+  details: string[];
+
+  constructor(details: string[]) {
+    super("Invalid tab payload");
+    this.name = "ValidationError";
+    this.details = details;
+  }
+}
+
+export function json(data: unknown, init: ResponseInit = {}) {
+  return Response.json(data, {
+    ...init,
+    headers: {
+      "Cache-Control": "no-store",
+      ...init.headers,
+    },
+  });
+}
+
+export function readLayoutTab(row: TabRow): LayoutTab {
+  return {
+    id: row.id,
+    name: row.name,
+    authorId: row.author_id,
+    clonedFromId: row.cloned_from_tab_id,
+    clonedFromName: row.cloned_from_tab_name,
+    layout: JSON.parse(row.layout_json) as Layout,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function validationErrorResponse(error: ValidationError) {
+  return json({ error: error.message, details: error.details }, { status: 400 });
+}
+
+export async function parseLayoutTabRequest(request: Request, options: ValidationOptions = {}) {
+  const text = await request.text();
+  if (TEXT_ENCODER.encode(text).length > VALIDATION_LIMITS.requestBytes) {
+    throw new ValidationError([`request body must be at most ${VALIDATION_LIMITS.requestBytes} bytes`]);
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(text) as unknown;
+  } catch {
+    throw new ValidationError(["request body must be valid JSON"]);
+  }
+
+  if (options.root === "tab") {
+    const record = asRecord(body);
+    return parseLayoutTabValue(record?.tab, "tab");
+  }
+
+  return parseLayoutTabValue(body, "tab");
+}
+
+export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
+  const details: string[] = [];
+  const tab = asRecord(value);
+
+  if (!tab) {
+    throw new ValidationError([`${path} must be an object`]);
+  }
+
+  const layout = asRecord(tab.layout);
+  if (!layout) {
+    details.push(`${path}.layout must be an object`);
+  }
+
+  const createdAt = readNullableString(tab.createdAt, `${path}.createdAt`, 64, details);
+  const updatedAt = readNullableString(tab.updatedAt, `${path}.updatedAt`, 64, details);
+  const canonical: LayoutTab = {
+    id: readId(tab.id, `${path}.id`, VALIDATION_LIMITS.tabIdChars, details),
+    name: readString(tab.name, `${path}.name`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
+    authorId: readNullableId(tab.authorId, `${path}.authorId`, VALIDATION_LIMITS.authorIdChars, details),
+    clonedFromId: readNullableId(tab.clonedFromId, `${path}.clonedFromId`, VALIDATION_LIMITS.authorIdChars, details),
+    clonedFromName: readNullableString(tab.clonedFromName, `${path}.clonedFromName`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
+    baseSvgMarkup: readNullableString(tab.baseSvgMarkup, `${path}.baseSvgMarkup`, VALIDATION_LIMITS.baseSvgMarkupChars, details),
+    layout: {
+      unit: "in",
+      bays: [],
+      tools: [],
+    },
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+
+  if (layout) {
+    if (layout.unit !== "in") {
+      details.push(`${path}.layout.unit must be "in"`);
+    }
+
+    canonical.layout.bays = readArray(layout.bays, `${path}.layout.bays`, VALIDATION_LIMITS.baysPerTab, details)
+      .map((bay, index) => readBay(bay, `${path}.layout.bays[${index}]`, details));
+    canonical.layout.tools = readArray(layout.tools, `${path}.layout.tools`, VALIDATION_LIMITS.toolsPerTab, details)
+      .map((tool, index) => readTool(tool, `${path}.layout.tools[${index}]`, details));
+  }
+
+  if (details.length > 0) {
+    throw new ValidationError(details);
+  }
+
+  return canonical;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readBay(value: unknown, path: string, details: string[]): Bay {
+  const bay = asRecord(value);
+  if (!bay) {
+    details.push(`${path} must be an object`);
+  }
+
+  return {
+    id: readId(bay?.id, `${path}.id`, VALIDATION_LIMITS.bayIdChars, details),
+    label: readString(bay?.label, `${path}.label`, VALIDATION_LIMITS.bayLabelChars, details, { trim: true }),
+    x: readNumber(bay?.x, `${path}.x`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
+    y: readNumber(bay?.y, `${path}.y`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
+    width: readNumber(bay?.width, `${path}.width`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
+    height: readNumber(bay?.height, `${path}.height`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
+  };
+}
+
+function readTool(value: unknown, path: string, details: string[]): ToolShape {
+  const tool = asRecord(value);
+  if (!tool) {
+    details.push(`${path} must be an object`);
+  }
+
+  const canonical: ToolShape = {
+    id: readId(tool?.id, `${path}.id`, VALIDATION_LIMITS.toolIdChars, details),
+    assetId: readId(tool?.assetId, `${path}.assetId`, VALIDATION_LIMITS.toolAssetIdChars, details),
+    name: readString(tool?.name, `${path}.name`, VALIDATION_LIMITS.toolNameChars, details, { trim: true }),
+    x: readNumber(tool?.x, `${path}.x`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
+    y: readNumber(tool?.y, `${path}.y`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
+    width: readNumber(tool?.width, `${path}.width`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
+    height: readNumber(tool?.height, `${path}.height`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
+    rotation: readNumber(tool?.rotation, `${path}.rotation`, VALIDATION_LIMITS.minRotation, VALIDATION_LIMITS.maxRotation, details),
+    color: readColor(tool?.color, `${path}.color`, details),
+  };
+
+  if (tool?.scope !== undefined && tool.scope !== null) {
+    canonical.scope = readScope(tool.scope, `${path}.scope`, details);
+  }
+
+  if (tool?.hazards !== undefined && tool.hazards !== null) {
+    canonical.hazards = readHazards(tool.hazards, `${path}.hazards`, details);
+  }
+
+  return canonical;
+}
+
+function readArray(value: unknown, path: string, maxLength: number, details: string[]) {
+  if (!Array.isArray(value)) {
+    details.push(`${path} must be an array`);
+    return [];
+  }
+
+  if (value.length > maxLength) {
+    details.push(`${path} must contain at most ${maxLength} items`);
+    return value.slice(0, maxLength);
+  }
+
+  return value;
+}
+
+function readId(value: unknown, path: string, maxLength: number, details: string[]) {
+  return readString(value, path, maxLength, details, { pattern: ID_PATTERN });
+}
+
+function readNullableId(value: unknown, path: string, maxLength: number, details: string[]) {
+  return readNullableString(value, path, maxLength, details, { pattern: ID_PATTERN });
+}
+
+function readNullableString(
+  value: unknown,
+  path: string,
+  maxLength: number,
+  details: string[],
+  options: { pattern?: RegExp; trim?: boolean } = {},
+) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  return readString(value, path, maxLength, details, options);
+}
+
+function readString(
+  value: unknown,
+  path: string,
+  maxLength: number,
+  details: string[],
+  options: { pattern?: RegExp; trim?: boolean } = {},
+) {
+  if (typeof value !== "string") {
+    details.push(`${path} must be a string`);
+    return "";
+  }
+
+  const text = options.trim ? value.trim() : value;
+  if (text.length < 1) {
+    details.push(`${path} must not be empty`);
+  }
+  if (text.length > maxLength) {
+    details.push(`${path} must be at most ${maxLength} characters`);
+  }
+  if (options.pattern && !options.pattern.test(text)) {
+    details.push(`${path} contains unsupported characters`);
+  }
+
+  return text;
+}
+
+function readNumber(value: unknown, path: string, min: number, max: number, details: string[]) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    details.push(`${path} must be a finite number`);
+    return 0;
+  }
+
+  if (value < min || value > max) {
+    details.push(`${path} must be between ${min} and ${max}`);
+  }
+
+  return value;
+}
+
+function readColor(value: unknown, path: string, details: string[]) {
+  const color = readString(value, path, 7, details);
+  if (!HEX_COLOR_PATTERN.test(color)) {
+    details.push(`${path} must be a hex color`);
+  }
+
+  return color;
+}
+
+function readScope(value: unknown, path: string, details: string[]) {
+  if (typeof value !== "string" || !ALLOWED_SCOPES.has(value as NonNullable<ToolShape["scope"]>)) {
+    details.push(`${path} must be an allowed scope`);
+    return "undefined";
+  }
+
+  return value as NonNullable<ToolShape["scope"]>;
+}
+
+function readHazards(value: unknown, path: string, details: string[]) {
+  if (!Array.isArray(value)) {
+    details.push(`${path} must be an array`);
+    return [];
+  }
+
+  if (value.length > VALIDATION_LIMITS.hazardsPerTool) {
+    details.push(`${path} must contain at most ${VALIDATION_LIMITS.hazardsPerTool} items`);
+  }
+
+  const seen = new Set<string>();
+  const hazards: NonNullable<ToolShape["hazards"]> = [];
+  for (const hazard of value) {
+    if (typeof hazard !== "string" || !ALLOWED_HAZARDS.has(hazard as NonNullable<ToolShape["hazards"]>[number])) {
+      details.push(`${path} contains an unsupported hazard`);
+      continue;
+    }
+    if (seen.has(hazard)) {
+      details.push(`${path} must not contain duplicate hazards`);
+      continue;
+    }
+    seen.add(hazard);
+    hazards.push(hazard as NonNullable<ToolShape["hazards"]>[number]);
+  }
+
+  return hazards;
+}

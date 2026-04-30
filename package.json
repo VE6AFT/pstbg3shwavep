@@ -1,0 +1,30 @@
+{
+  "name": "bg-ps-ai-floorplan",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "preview": "vite preview --host 127.0.0.1",
+    "cf:dev": "npx wrangler pages dev dist --d1 DB=makerspace_floorplan",
+    "db:migrate:local": "npx wrangler d1 execute makerspace_floorplan --local --file=./schema.sql",
+    "db:seed:local": "npx wrangler d1 execute makerspace_floorplan --local --file=./seed.sql",
+    "db:migrate": "npx wrangler d1 execute makerspace_floorplan --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "interactjs": "^1.10.27",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260426.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.5"
+  }
+}

@@ -1,0 +1,8 @@
+name = "pstbg3shwavep"
+compatibility_date = "2026-04-29"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "makerspace_floorplan"
+database_id = "ec3d6ab7-e778-4033-9857-d15aa6662acb"
