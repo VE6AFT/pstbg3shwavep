@@ -2,14 +2,14 @@ import {
   json,
   publicLayoutTab,
   readAuthorIdHeader,
+  readTabCreationLimit,
   parseLayoutTabRequest,
+  tabCreationLimitResponse,
   validationErrorResponse,
   ValidationError,
   type Env,
   type LayoutTab,
 } from "../_shared";
-
-const TAB_LIMIT = 20;
 
 type CloneBody = {
   tab: LayoutTab;
@@ -27,16 +27,9 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       return json({ error: "Missing author id" }, { status: 400 });
     }
 
-    const limitRow = await env.DB
-      .prepare(`SELECT 1 AS hit FROM tabs WHERE author_id = ? LIMIT 1 OFFSET ?`)
-      .bind(authorId, TAB_LIMIT - 1)
-      .first<{ hit: number }>();
-
-    if (limitRow) {
-      return json(
-        { error: `tab limit reached (${TAB_LIMIT} max per user)` },
-        { status: 429 },
-      );
+    const creationLimit = await readTabCreationLimit(env.DB, authorId);
+    if (creationLimit) {
+      return tabCreationLimitResponse(creationLimit);
     }
 
     const updatedAt = new Date().toISOString();

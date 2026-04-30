@@ -80,6 +80,13 @@ export const VALIDATION_LIMITS = {
   hazardsPerTool: 6,
 } as const;
 
+export const TAB_LIMITS = {
+  perAuthor: 20,
+  total: 2048,
+} as const;
+
+export type TabCreationLimit = "per-author" | "total";
+
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const TEXT_ENCODER = new TextEncoder();
@@ -172,6 +179,37 @@ export function publicLayoutTab(tab: LayoutTab): LayoutTab {
 
 export function validationErrorResponse(error: ValidationError) {
   return json({ error: error.message, details: error.details }, { status: 400 });
+}
+
+export function tabCreationLimitResponse(limit: TabCreationLimit) {
+  if (limit === "per-author") {
+    return json(
+      { error: `tab limit reached (${TAB_LIMITS.perAuthor} max per user)` },
+      { status: 429 },
+    );
+  }
+
+  return json(
+    { error: `tab limit reached (${TAB_LIMITS.total} max total)` },
+    { status: 429 },
+  );
+}
+
+export async function readTabCreationLimit(db: D1Database, authorId: string): Promise<TabCreationLimit | null> {
+  const [authorLimitRow, totalLimitRow] = await Promise.all([
+    db
+      .prepare(`SELECT 1 AS hit FROM tabs WHERE author_id = ? LIMIT 1 OFFSET ?`)
+      .bind(authorId, TAB_LIMITS.perAuthor - 1)
+      .first<{ hit: number }>(),
+    db
+      .prepare(`SELECT 1 AS hit FROM tabs LIMIT 1 OFFSET ?`)
+      .bind(TAB_LIMITS.total - 1)
+      .first<{ hit: number }>(),
+  ]);
+
+  if (authorLimitRow) return "per-author";
+  if (totalLimitRow) return "total";
+  return null;
 }
 
 export async function parseLayoutTabRequest(request: Request, options: ValidationOptions = {}) {

@@ -952,6 +952,19 @@ function App() {
     let sourceTab = source;
     if (sourceTab.hasLayout === false) {
       try {
+        const cachedTab = applyCachedLayout(sourceTab, await readCachedLayout(sourceTab.id));
+        if (cachedTab.hasLayout !== false) {
+          sourceTab = normalizeTab(cachedTab);
+          setTabs((current) => orderTabs(current.map((item) => (item.id === sourceTab.id ? sourceTab : item))));
+          pushDebugEvent("clone source loaded from cache");
+        }
+      } catch {
+        pushDebugEvent("clone source cache miss");
+      }
+    }
+
+    if (sourceTab.hasLayout === false) {
+      try {
         const { tab } = await fetchTab(sourceTab.id, localUserId);
         sourceTab = normalizeTab({ ...tab, hasLayout: true });
         setTabs((current) => orderTabs(current.map((item) => (item.id === sourceTab.id ? sourceTab : item))));

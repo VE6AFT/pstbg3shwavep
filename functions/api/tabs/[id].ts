@@ -3,7 +3,9 @@ import {
   publicLayoutTab,
   readAuthorIdHeader,
   readLayoutTab,
+  readTabCreationLimit,
   parseLayoutTabRequest,
+  tabCreationLimitResponse,
   validationErrorResponse,
   ValidationError,
   type Env,
@@ -55,6 +57,13 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
     const existing = await env.DB.prepare("SELECT author_id, created_at FROM tabs WHERE id = ?").bind(body.id).first<{ author_id: string | null; created_at: string }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to edit this tab" }, { status: 403 });
+    }
+
+    if (!existing) {
+      const creationLimit = await readTabCreationLimit(env.DB, authorId);
+      if (creationLimit) {
+        return tabCreationLimitResponse(creationLimit);
+      }
     }
 
     const updatedAt = new Date().toISOString();

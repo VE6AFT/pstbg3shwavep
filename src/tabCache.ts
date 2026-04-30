@@ -91,16 +91,12 @@ export async function readCachedTabs(activeTabId: string | null): Promise<Layout
 
   const metas = await getAll<CachedTabMeta>(db, TABS_META_STORE);
   const activeMeta = activeTabId ? metas.find((meta) => meta.id === activeTabId) ?? null : null;
-  const activeLayout = activeMeta ? await readCachedLayout(activeMeta.id) : null;
+  const activeLayout = activeMeta ? await get<CachedTabLayout>(db, TAB_LAYOUTS_STORE, activeMeta.id) : null;
 
   return metas.map((meta) => {
     const tab = tabFromCachedMeta(meta);
-    if (meta.id !== activeMeta?.id || !isCachedLayoutFresh(meta, activeLayout)) return tab;
-    return {
-      ...tab,
-      hasLayout: true,
-      layout: activeLayout.layout,
-    };
+    if (meta.id !== activeMeta?.id) return tab;
+    return applyCachedLayout(tab, activeLayout);
   });
 }
 
