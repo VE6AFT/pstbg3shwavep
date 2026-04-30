@@ -86,6 +86,42 @@ describe("layout tab validation", () => {
     expect(() => parseLayoutTabValue(makeTab({ layout: { unit: "in", tools } }))).toThrow(ValidationError);
   });
 
+  it("limits tab names to the shared maximum length", () => {
+    const maxName = "a".repeat(VALIDATION_LIMITS.tabNameChars);
+
+    expect(parseLayoutTabValue(makeTab({ name: maxName })).name).toBe(maxName);
+    expect(() => parseLayoutTabValue(makeTab({ name: `${maxName}a` }))).toThrow(ValidationError);
+  });
+
+  it("limits tool names and sizes to the shared maximums", () => {
+    const maxToolName = "a".repeat(VALIDATION_LIMITS.toolNameChars);
+
+    expect(parseLayoutTabValue(makeTab({
+      layout: {
+        unit: "in",
+        tools: [makeTool({ name: maxToolName, width: VALIDATION_LIMITS.maxSize, height: VALIDATION_LIMITS.maxSize })],
+      },
+    })).layout.tools[0]).toMatchObject({
+      name: maxToolName,
+      width: VALIDATION_LIMITS.maxSize,
+      height: VALIDATION_LIMITS.maxSize,
+    });
+
+    expect(() => parseLayoutTabValue(makeTab({
+      layout: {
+        unit: "in",
+        tools: [makeTool({ name: `${maxToolName}a` })],
+      },
+    }))).toThrow(ValidationError);
+
+    expect(() => parseLayoutTabValue(makeTab({
+      layout: {
+        unit: "in",
+        tools: [makeTool({ width: VALIDATION_LIMITS.maxSize + 1 })],
+      },
+    }))).toThrow(ValidationError);
+  });
+
   it("rejects oversized JSON before parsing", async () => {
     const request = new Request("https://example.test/api/tabs", {
       method: "POST",

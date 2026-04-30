@@ -20,6 +20,9 @@ const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 2500;
 const DEFAULT_SAVE_DELAY_MS = 5000;
+const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
+const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
+const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
 
 function loadControls() {
   try {
@@ -136,6 +139,15 @@ function formatCloneName(id: string) {
   return id.split("-").at(-1) ?? id;
 }
 
+function normalizeTabName(name: string | null | undefined, fallback: string) {
+  const trimmed = name?.trim() ?? "";
+  return (trimmed || fallback).slice(0, MAX_TAB_NAME_CHARS);
+}
+
+function normalizeToolName(name: string) {
+  return name.trim().slice(0, MAX_TOOL_NAME_CHARS);
+}
+
 function tabSortTime(tab: LayoutTab) {
   const value = tab.createdAt ?? tab.updatedAt;
   const time = value ? new Date(value).getTime() : Number.NaN;
@@ -183,12 +195,13 @@ function formatKiB(bytes: number) {
 
 function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
   const isFirstSeed = tab.id === "tab-default" || tab.name === "Now";
+  const fallbackName = `Sheet ${index + 1}`;
 
   return {
     ...tab,
-    name: isFirstSeed ? "Now" : tab.name || `Sheet ${index + 1}`,
+    name: isFirstSeed ? "Now" : normalizeTabName(tab.name, fallbackName),
     clonedFromId: tab.clonedFromId ?? null,
-    clonedFromName: tab.clonedFromName ?? null,
+    clonedFromName: tab.clonedFromName ? normalizeTabName(tab.clonedFromName, "") : null,
     canEdit: tab.canEdit ?? false,
     hasLayout: tab.hasLayout ?? true,
     layout: {
@@ -374,6 +387,10 @@ function parseFeetInches(val: string): number {
   if (inchesMatch) totalInches += parseFloat(inchesMatch[1]);
   if (!feetMatch && !inchesMatch) return parseFloat(val) || 0;
   return totalInches;
+}
+
+function isValidToolSize(value: number) {
+  return Number.isFinite(value) && value >= VALIDATION_LIMITS.minSize && value <= MAX_TOOL_SIZE_INCHES;
 }
 
 const SCOPE_COLORS = {
@@ -973,7 +990,7 @@ function App() {
   };
 
   const renameTab = (tabId: string, nextName: string) => {
-    const trimmed = nextName.trim();
+    const trimmed = normalizeTabName(nextName, "");
     if (!trimmed) {
       setRenamingTabId(null);
       return;
@@ -1088,13 +1105,14 @@ function App() {
 
   const handleAddToolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const name = normalizeToolName(addToolForm.name);
     const w = parseFeetInches(addToolForm.x);
     const h = parseFeetInches(addToolForm.y);
 
     const errors = {
-      name: !addToolForm.name.trim(),
-      x: !w,
-      y: !h,
+      name: !name,
+      x: !isValidToolSize(w),
+      y: !isValidToolSize(h),
     };
     setAddToolErrors(errors);
     if (Object.values(errors).some(v => v)) return;
@@ -1105,7 +1123,7 @@ function App() {
     const newTool: ToolShape = {
       id: uid("tool"),
       assetId: "custom",
-      name: addToolForm.name,
+      name,
       x: cx,
       y: cy,
       width: w,
@@ -1196,13 +1214,20 @@ function App() {
             <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-glow" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
-                <input type="text" autoFocus value={addToolForm.name} onChange={(e) => setAddToolForm({ ...addToolForm, name: e.target.value })} />
+                <input
+                  type="text"
+                  autoFocus
+                  maxLength={MAX_TOOL_NAME_CHARS}
+                  value={addToolForm.name}
+                  onChange={(e) => setAddToolForm({ ...addToolForm, name: e.target.value.slice(0, MAX_TOOL_NAME_CHARS) })}
+                />
               </label>
               <div className="row">
                 <label>
-                  {addToolErrors.x && <span className="error-bubble">req'd</span>}
+                  {addToolErrors.x && <span className="error-bubble">max 120'</span>}
                   <input
                     type="text"
+                    inputMode="decimal"
                     value={addToolForm.x}
                     onChange={(e) => setAddToolForm({ ...addToolForm, x: e.target.value })}
                     onBlur={() => {
@@ -1217,9 +1242,10 @@ function App() {
                   />
                 </label>
                 <label>
-                  {addToolErrors.y && <span className="error-bubble">req'd</span>}
+                  {addToolErrors.y && <span className="error-bubble">max 120'</span>}
                   <input
                     type="text"
+                    inputMode="decimal"
                     value={addToolForm.y}
                     onChange={(e) => setAddToolForm({ ...addToolForm, y: e.target.value })}
                     onBlur={() => {
@@ -1524,7 +1550,8 @@ function App() {
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", boxSizing: "border-box" }}
                     value={renameDraft}
                     autoFocus
-                    onChange={(event) => setRenameDraft(event.target.value)}
+                    maxLength={MAX_TAB_NAME_CHARS}
+                    onChange={(event) => setRenameDraft(event.target.value.slice(0, MAX_TAB_NAME_CHARS))}
                     onBlur={() => renameTab(tab.id, renameDraft)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") renameTab(tab.id, renameDraft);
