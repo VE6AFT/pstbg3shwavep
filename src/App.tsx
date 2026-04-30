@@ -888,12 +888,11 @@ function App() {
   };
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.target instanceof Element && event.target.closest(".tool-node")) return;
     if (!canEdit) {
       setSyncMessage("Clone tab to edit");
       triggerClonePrompt();
-      return;
     }
-    if (event.target instanceof Element && event.target.closest(".tool-node")) return;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     svgRef.current?.setPointerCapture(event.pointerId);
@@ -910,6 +909,10 @@ function App() {
 
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
+    if (!canEdit) {
+      setSyncMessage("Clone tab to edit");
+      triggerClonePrompt();
+    }
     const local = getSvgPoint(event.clientX, event.clientY);
     if (!local) return;
 
