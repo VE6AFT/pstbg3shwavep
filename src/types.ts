@@ -47,6 +47,7 @@ export type LayoutTab = {
   id: string;
   name: string;
   authorId?: string | null;
+  canEdit?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
   baseSvgMarkup?: string | null;

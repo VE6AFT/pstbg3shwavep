@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   parseLayoutTabRequest,
   parseLayoutTabValue,
+  readAuthorIdHeader,
+  readLayoutTab,
   VALIDATION_LIMITS,
   ValidationError,
+  type TabRow,
   type LayoutTab,
   type ToolShape,
 } from "../functions/api/_shared";
@@ -137,5 +140,30 @@ describe("layout tab validation", () => {
     await expect(parseLayoutTabRequest(requestWithJson({ tab: makeTab() }), { root: "tab" })).resolves.toMatchObject({
       id: "tab-default",
     });
+  });
+
+  it("can expose editability without leaking author ids", () => {
+    const tab = readLayoutTab({
+      id: "tab-owned",
+      name: "Owned Draft",
+      can_edit: 1,
+      cloned_from_tab_id: null,
+      cloned_from_tab_name: null,
+      layout_json: JSON.stringify(makeTab().layout),
+      created_at: "2026-04-30T00:00:00.000Z",
+      updated_at: "2026-04-30T00:00:00.000Z",
+    } satisfies TabRow);
+
+    expect(tab.canEdit).toBe(true);
+    expect("authorId" in tab).toBe(false);
+  });
+
+  it("accepts only valid anonymous author headers", () => {
+    expect(readAuthorIdHeader(new Request("https://example.test", {
+      headers: { "X-Author-Id": "user-local_123" },
+    }))).toBe("user-local_123");
+    expect(readAuthorIdHeader(new Request("https://example.test", {
+      headers: { "X-Author-Id": "user with spaces" },
+    }))).toBeNull();
   });
 });

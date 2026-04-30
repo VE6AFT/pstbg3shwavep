@@ -51,6 +51,7 @@ export type LayoutTab = {
   id: string;
   name: string;
   authorId?: string | null;
+  canEdit?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
   baseSvgMarkup?: string | null;
@@ -62,7 +63,8 @@ export type LayoutTab = {
 export type TabRow = {
   id: string;
   name: string;
-  author_id: string | null;
+  author_id?: string | null;
+  can_edit?: number | boolean | null;
   cloned_from_tab_id: string | null;
   cloned_from_tab_name: string | null;
   layout_json: string;
@@ -146,17 +148,37 @@ export function json(data: unknown, init: ResponseInit = {}) {
   });
 }
 
+export function readAuthorIdHeader(request: Request) {
+  const value = request.headers.get("X-Author-Id");
+  if (!value) return null;
+  if (value.length > VALIDATION_LIMITS.authorIdChars || !ID_PATTERN.test(value)) return null;
+  return value;
+}
+
 export function readLayoutTab(row: TabRow): LayoutTab {
-  return {
+  const tab: LayoutTab = {
     id: row.id,
     name: row.name,
-    authorId: row.author_id,
     clonedFromId: row.cloned_from_tab_id,
     clonedFromName: row.cloned_from_tab_name,
     layout: JSON.parse(row.layout_json) as Layout,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+
+  if ("author_id" in row) {
+    tab.authorId = row.author_id ?? null;
+  }
+  if ("can_edit" in row) {
+    tab.canEdit = Boolean(row.can_edit);
+  }
+
+  return tab;
+}
+
+export function publicLayoutTab(tab: LayoutTab): LayoutTab {
+  const { authorId: _authorId, ...publicTab } = tab;
+  return publicTab;
 }
 
 export function validationErrorResponse(error: ValidationError) {

@@ -1,5 +1,7 @@
 import {
   json,
+  publicLayoutTab,
+  readAuthorIdHeader,
   parseLayoutTabRequest,
   validationErrorResponse,
   ValidationError,
@@ -10,19 +12,25 @@ import {
 export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
   try {
     const body = await parseLayoutTabRequest(request);
+    const authorId = readAuthorIdHeader(request);
+    if (!authorId) {
+      return json({ error: "Missing author id" }, { status: 400 });
+    }
 
     if (body.id !== params.id) {
       return json({ error: "Route tab id does not match payload id" }, { status: 400 });
     }
 
     const existing = await env.DB.prepare("SELECT author_id, created_at FROM tabs WHERE id = ?").bind(body.id).first<{ author_id: string | null; created_at: string }>();
-    if (existing && existing.author_id && existing.author_id !== body.authorId) {
+    if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to edit this tab" }, { status: 403 });
     }
 
     const updatedAt = new Date().toISOString();
     const tab: LayoutTab = {
       ...body,
+      authorId: existing ? existing.author_id : authorId,
+      canEdit: !existing || existing.author_id === authorId,
       createdAt: existing?.created_at ?? updatedAt,
       updatedAt,
     };
@@ -35,10 +43,10 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
         layout_json = excluded.layout_json,
         updated_at = excluded.updated_at`,
     )
-      .bind(tab.id, tab.name, tab.authorId ?? null, JSON.stringify(tab.layout), updatedAt, updatedAt)
+      .bind(tab.id, tab.name, tab.authorId ?? null, JSON.stringify(tab.layout), tab.createdAt ?? updatedAt, updatedAt)
       .run();
 
-    return json({ tab });
+    return json({ tab: publicLayoutTab(tab) });
   } catch (error) {
     if (error instanceof ValidationError) {
       return validationErrorResponse(error);
@@ -55,7 +63,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, 
       return json({ error: "The Now tab cannot be deleted" }, { status: 400 });
     }
 
-    const authorId = request.headers.get("X-Author-Id");
+    const authorId = readAuthorIdHeader(request);
     const existing = await env.DB.prepare("SELECT author_id FROM tabs WHERE id = ?").bind(params.id).first<{ author_id: string | null }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to delete this tab" }, { status: 403 });

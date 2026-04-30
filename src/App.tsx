@@ -181,6 +181,7 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
     clonedFromId: tab.clonedFromId ?? null,
     clonedFromName: tab.clonedFromName ?? null,
     baseSvgMarkup: tab.baseSvgMarkup ?? null,
+    canEdit: tab.canEdit ?? false,
     layout: {
       ...tab.layout,
       bays: BAY_LAYOUT.map((bay) => ({ ...bay })),
@@ -235,18 +236,20 @@ function cloneLayoutTab(source: LayoutTab): LayoutTab {
   };
 }
 
-async function fetchTabs() {
-  const response = await fetch("/api/tabs");
+async function fetchTabs(authorId: string) {
+  const response = await fetch("/api/tabs", {
+    headers: { "X-Author-Id": authorId },
+  });
   if (!response.ok) {
     throw new Error(`Failed to load tabs: ${response.status}`);
   }
   return (await response.json()) as { tabs: LayoutTab[] };
 }
 
-async function saveTab(tab: LayoutTab) {
+async function saveTab(tab: LayoutTab, authorId: string) {
   const response = await fetch(`/api/tabs/${tab.id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Author-Id": authorId },
     body: JSON.stringify(tab),
   });
 
@@ -259,10 +262,10 @@ async function saveTab(tab: LayoutTab) {
 
 class LimitError extends Error { }
 
-async function persistClone(tab: LayoutTab) {
+async function persistClone(tab: LayoutTab, authorId: string) {
   const response = await fetch("/api/tabs/clone", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Author-Id": authorId },
     body: JSON.stringify({ tab }),
   });
 
@@ -446,7 +449,7 @@ function App() {
     ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(activeTab.baseSvgMarkup)}`
     : null;
 
-  const canEdit = showDebug || activeTab.authorId === localUserId;
+  const canEdit = showDebug || activeTab.canEdit === true || activeTab.authorId === localUserId;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -533,7 +536,7 @@ function App() {
           throw new Error("DB connection disabled");
         }
 
-        const { tab } = await saveTab(normalizeTab(draft));
+        const { tab } = await saveTab(normalizeTab(draft), localUserId);
         setTabs((current) => current.map((item) => (item.id === tab.id ? normalizeTab(tab) : item)));
         setSyncState("saved");
         setSyncMessage("Saved to D1");
@@ -545,7 +548,7 @@ function App() {
         pushDebugEvent(`save failed (${dbDisabled ? "DB disabled" : "local only"})`);
       }
     }, delayMs);
-  }, [pushDebugEvent, dbDisabled, isLocalhost]);
+  }, [localUserId, pushDebugEvent, dbDisabled, isLocalhost]);
 
   useEffect(() => {
     if (tutorialStep && tutorialStep !== "rename") {
@@ -596,7 +599,7 @@ function App() {
   }, [showAddTool, tutorialStep]);
 
   useEffect(() => {
-    fetchTabs()
+    fetchTabs(localUserId)
       .then(({ tabs: remoteTabs }) => {
         if (remoteTabs.length === 0) return;
         const normalized = orderTabs(remoteTabs.map(normalizeTab));
@@ -618,7 +621,7 @@ function App() {
       .finally(() => {
         initialized.current = true;
       });
-  }, [pushDebugEvent]);
+  }, [localUserId, pushDebugEvent]);
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -852,7 +855,7 @@ function App() {
     }
 
     try {
-      const { tab } = await persistClone(clone);
+      const { tab } = await persistClone(clone, localUserId);
         setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? normalizeTab(tab) : item))));
       setSyncState("saved");
       setSyncMessage("Clone saved to D1");
@@ -1413,7 +1416,6 @@ function App() {
                               )}
                               {h === "eyes" && (
                                 <g transform="translate(0, 8)">
-                                  <path d="M -4 0 C -2 -3 2 -3 4 0 C 2 3 -2 3 -4 0 Z" fill="currentColor" />
                                   <circle cx="0" cy="0" r="1.2" fill="white" />
                                   <circle cx="0" cy="0" r="0.6" fill="currentColor" />
                                 </g>
@@ -1434,7 +1436,7 @@ function App() {
             ref={deleteZoneRef}
             className={`delete-zone ${deleteProximity === 1 ? "shaking" : ""} ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
             style={{
-              background: `rgb(${203 - (203 - 239) * deleteProximity}, ${213 - (213 - 68) * deleteProximity}, ${225 - (225 - 68) * deleteProximity})`,
+              background: `rgb(${203 - (203 - 239) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${213 - (213 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${225 - (225 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)})`,
             }}
             aria-label="Drop here to delete"
           >
@@ -1459,7 +1461,7 @@ function App() {
         {tabs.map((tab) => {
           const isNow = tab.name === "Now";
           const isActive = tab.id === activeTabId;
-          const isUserTab = showDebug || tab.authorId === localUserId;
+          const isUserTab = showDebug || tab.canEdit === true || tab.authorId === localUserId;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
