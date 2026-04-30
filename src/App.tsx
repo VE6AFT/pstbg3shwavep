@@ -11,10 +11,11 @@ import { VALIDATION_LIMITS } from "../functions/api/_shared";
 import buildingGeometrySvg from "./assets/building-geometry.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
+import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import type { LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
-const STORAGE_KEY = "pstbg3shwavep-tabs";
+const OLD_TABS_STORAGE_KEY = "pstbg3shwavep-tabs";
 const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 2500;
@@ -323,17 +324,6 @@ async function deleteTabFromDb(tabId: string, authorId: string) {
   }
 }
 
-function loadCachedTabs() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const cached = orderTabs((JSON.parse(raw) as LayoutTab[]).map(normalizeTab));
-    return cached.length > 0 ? cached : null;
-  } catch {
-    return null;
-  }
-}
-
 function mergeTabSummaries(summaries: LayoutTab[], currentTabs: LayoutTab[]) {
   return summaries.map((summary, index) => {
     const normalized = normalizeTab(summary, index);
@@ -407,7 +397,7 @@ const SCOPE_COLORS = {
 
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
-  const [tabs, setTabs] = useState<LayoutTab[]>(() => loadCachedTabs() ?? orderTabs(seedTabs.map(normalizeTab)));
+  const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(seedTabs.map(normalizeTab)));
   const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId(tabs) ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
@@ -441,6 +431,7 @@ function App() {
   const [tutorialStep, setTutorialStep] = useState<null | "zoom" | "rotate" | "delete" | "add" | "rename">(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [deleteProximity, setDeleteProximity] = useState(0);
+  const [cacheReady, setCacheReady] = useState(false);
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const flashTimerRef = useRef<number | null>(null);
@@ -579,10 +570,33 @@ function App() {
   }, [showAddTool, tutorialStep]);
 
   useEffect(() => {
-    fetchTabs(localUserId)
-      .then(({ tabs: remoteTabs }) => {
-        if (remoteTabs.length === 0) return;
+    let cancelled = false;
+
+    const loadTabs = async () => {
+      try {
+        const savedTabId = loadActiveTabId();
+        const cachedTabs = orderTabs((await readCachedTabs(savedTabId)).map(normalizeTab));
+        if (!cancelled && cachedTabs.length > 0) {
+          tabsRef.current = cachedTabs;
+          setTabs(cachedTabs);
+          setActiveTabId((current) => {
+            const cachedActiveTabId = loadActiveTabId(cachedTabs);
+            if (cachedActiveTabId) return cachedActiveTabId;
+            return cachedTabs.some((tab) => tab.id === current) ? current : cachedTabs[0].id;
+          });
+          pushDebugEvent("cache load ok");
+        }
+      } catch {
+        if (!cancelled) pushDebugEvent("cache load failed");
+      } finally {
+        if (!cancelled) setCacheReady(true);
+      }
+
+      try {
+        const { tabs: remoteTabs } = await fetchTabs(localUserId);
+        if (cancelled || remoteTabs.length === 0) return;
         const normalized = orderTabs(mergeTabSummaries(remoteTabs, tabsRef.current));
+        tabsRef.current = normalized;
         setTabs(normalized);
         setActiveTabId((current) => {
           const savedTabId = loadActiveTabId(normalized);
@@ -590,13 +604,18 @@ function App() {
           return normalized.some((tab) => tab.id === current) ? current : normalized[0].id;
         });
         pushDebugEvent("fetch ok");
-      })
-      .catch(() => {
-        pushDebugEvent("fetch failed (using local)");
-      })
-      .finally(() => {
+      } catch {
+        if (!cancelled) pushDebugEvent("fetch failed (using local)");
+      } finally {
         initialized.current = true;
-      });
+      }
+    };
+
+    void loadTabs();
+
+    return () => {
+      cancelled = true;
+    };
   }, [localUserId, pushDebugEvent]);
 
   useEffect(() => {
@@ -604,18 +623,36 @@ function App() {
     if (!tab || tab.hasLayout !== false) return;
 
     let cancelled = false;
-    fetchTab(tab.id, localUserId)
-      .then(({ tab: loaded }) => {
+    const loadLayout = async () => {
+      try {
+        const cachedLayout = await readCachedLayout(tab.id);
+        if (cancelled) return;
+        const cachedTab = applyCachedLayout(tab, cachedLayout);
+        if (cachedTab.hasLayout !== false) {
+          setTabs((current) =>
+            orderTabs(current.map((item) => (item.id === cachedTab.id ? normalizeTab(cachedTab) : item))),
+          );
+          pushDebugEvent("tab layout loaded from cache");
+          return;
+        }
+      } catch {
+        if (!cancelled) pushDebugEvent("tab layout cache miss");
+      }
+
+      try {
+        const { tab: loaded } = await fetchTab(tab.id, localUserId);
         if (cancelled) return;
         setTabs((current) =>
           orderTabs(current.map((item) => (item.id === loaded.id ? normalizeTab({ ...loaded, hasLayout: true }) : item))),
         );
         pushDebugEvent("tab layout loaded");
-      })
-      .catch(() => {
+      } catch {
         if (cancelled) return;
         pushDebugEvent("tab layout load failed");
-      });
+      }
+    };
+
+    void loadLayout();
 
     return () => {
       cancelled = true;
@@ -639,18 +676,22 @@ function App() {
   }, [gridDark, showInfra, showMezz]);
 
   useEffect(() => {
+    if (!cacheReady) return;
+
     if (localWriteTimer.current) {
       window.clearTimeout(localWriteTimer.current);
     }
     localWriteTimer.current = window.setTimeout(() => {
-      const hydratedTabs = tabsRef.current.filter((tab) => tab.hasLayout !== false);
-      if (hydratedTabs.length > 0) {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify(orderTabs(hydratedTabs.map(normalizeTab))),
-        );
-      }
-      localWriteTimer.current = null;
+      void writeTabCacheSnapshot(orderTabs(tabsRef.current.map(normalizeTab)))
+        .then(() => {
+          pushDebugEvent("cache write ok");
+        })
+        .catch(() => {
+          pushDebugEvent("cache write failed");
+        })
+        .finally(() => {
+          localWriteTimer.current = null;
+        });
     }, LOCAL_WRITE_DELAY_MS);
 
     if (!initialized.current) return;
@@ -659,7 +700,7 @@ function App() {
       pendingSaveTabId.current = null;
       saveDelayMs.current = DEFAULT_SAVE_DELAY_MS;
     }
-  }, [scheduleSave, tabs]);
+  }, [cacheReady, pushDebugEvent, scheduleSave, tabs]);
 
   useEffect(() => {
     activeTabButtonRef.current?.scrollIntoView({
@@ -982,9 +1023,12 @@ function App() {
   };
 
   const clearLocalDraft = () => {
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(OLD_TABS_STORAGE_KEY);
     localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
     localStorage.removeItem("pstbg3shwavep-tutorial-seen");
+    void clearTabCache().catch(() => {
+      pushDebugEvent("cache clear failed");
+    });
     const freshTabs = orderTabs(seedTabs.map(normalizeTab));
     setTabs(freshTabs);
     setActiveTabId(freshTabs[0].id);
