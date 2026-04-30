@@ -2,15 +2,6 @@ export type Env = {
   DB: D1Database;
 };
 
-export type Bay = {
-  id: string;
-  label: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
 export type ToolShape = {
   id: string;
   assetId: string;
@@ -43,7 +34,6 @@ export type ToolShape = {
 
 export type Layout = {
   unit: "in";
-  bays: Bay[];
   tools: ToolShape[];
 };
 
@@ -77,12 +67,9 @@ export const VALIDATION_LIMITS = {
   tabIdChars: 96,
   authorIdChars: 128,
   tabNameChars: 80,
-  bayIdChars: 96,
-  bayLabelChars: 80,
   toolIdChars: 96,
   toolAssetIdChars: 128,
   toolNameChars: 80,
-  baysPerTab: 50,
   toolsPerTab: 500,
   minCoordinate: -100000,
   maxCoordinate: 100000,
@@ -96,7 +83,7 @@ export const VALIDATION_LIMITS = {
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const TEXT_ENCODER = new TextEncoder();
-const EMPTY_LAYOUT: Layout = { unit: "in", bays: [], tools: [] };
+const EMPTY_LAYOUT: Layout = { unit: "in", tools: [] };
 const ALLOWED_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
   "undefined",
   "automotive",
@@ -231,7 +218,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
     clonedFromName: readNullableString(tab.clonedFromName, `${path}.clonedFromName`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
     layout: {
       unit: "in",
-      bays: [],
       tools: [],
     },
     ...(createdAt ? { createdAt } : {}),
@@ -243,8 +229,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
       details.push(`${path}.layout.unit must be "in"`);
     }
 
-    canonical.layout.bays = readArray(layout.bays, `${path}.layout.bays`, VALIDATION_LIMITS.baysPerTab, details)
-      .map((bay, index) => readBay(bay, `${path}.layout.bays[${index}]`, details));
     canonical.layout.tools = readArray(layout.tools, `${path}.layout.tools`, VALIDATION_LIMITS.toolsPerTab, details)
       .map((tool, index) => readTool(tool, `${path}.layout.tools[${index}]`, details));
   }
@@ -258,22 +242,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function readBay(value: unknown, path: string, details: string[]): Bay {
-  const bay = asRecord(value);
-  if (!bay) {
-    details.push(`${path} must be an object`);
-  }
-
-  return {
-    id: readId(bay?.id, `${path}.id`, VALIDATION_LIMITS.bayIdChars, details),
-    label: readString(bay?.label, `${path}.label`, VALIDATION_LIMITS.bayLabelChars, details, { trim: true }),
-    x: readNumber(bay?.x, `${path}.x`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
-    y: readNumber(bay?.y, `${path}.y`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
-    width: readNumber(bay?.width, `${path}.width`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
-    height: readNumber(bay?.height, `${path}.height`, VALIDATION_LIMITS.minSize, VALIDATION_LIMITS.maxSize, details),
-  };
 }
 
 function readTool(value: unknown, path: string, details: string[]): ToolShape {

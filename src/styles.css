@@ -394,50 +394,7 @@ button {
   stroke-width: 0.8;
 }
 
-.bay-grid-line {
-  fill: none;
-  stroke: rgba(32, 36, 39, 0);
-  stroke-width: 0.8;
-}
-
-.bay-outline {
-  fill: rgba(255, 255, 255, 0.5);
-  stroke: #30383a;
-  stroke-width: 2;
-}
-
-.bay-grid-fill {
-  fill: url(#bay-grid);
-  stroke: none;
-  pointer-events: none;
-}
-
-.floorplan.grid-dark .bay-outline {
-  fill: rgba(255, 255, 255, 0.46);
-  stroke: #15191b;
-  stroke-width: 2;
-}
-
-.floorplan.grid-dark .bay-grid-line {
-  stroke: rgba(32, 36, 39, 0.36);
-  stroke-width: 1.2;
-}
-
-.bay text {
-  fill: #252b2d;
-  font-size: 34px;
-  font-weight: 850;
-  pointer-events: none;
-}
-
-.bay .bay-size {
-  fill: var(--ink-soft);
-  font-size: 18px;
-  font-weight: 700;
-}
-
 .base-svg-layer {
-  opacity: 0.58;
   pointer-events: none;
 }
 
@@ -447,6 +404,15 @@ button {
 }
 
 .floorplan.show-infra .infra-layer {
+  display: block;
+}
+
+.mezzanine-layer {
+  display: none;
+  pointer-events: none;
+}
+
+.floorplan.show-mezz .mezzanine-layer {
   display: block;
 }
 

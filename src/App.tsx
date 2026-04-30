@@ -8,9 +8,10 @@ import {
   useState,
 } from "react";
 import { VALIDATION_LIMITS } from "../functions/api/_shared";
+import buildingGeometrySvg from "./assets/building-geometry.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
-import type { Bay, LayoutTab, SaveResponse, ToolShape } from "./types";
+import type { LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
 const STORAGE_KEY = "pstbg3shwavep-tabs";
@@ -28,13 +29,6 @@ function loadControls() {
   }
 }
 
-const BAY_LAYOUT: Bay[] = [
-  { id: "bay-105", label: "105", x: 0, y: 0, width: 1188, height: 444 },
-  { id: "bay-108", label: "108", x: 0, y: 516, width: 1164, height: 324 },
-  { id: "bay-110", label: "110", x: 0, y: 840, width: 1164, height: 324 },
-];
-const MEZZ_WIDTH = 360;
-const MEZZ_GAP = 24; // 2ft gap between mezz and bay
 const STAGE_PAD = 200;
 
 type DragState = {
@@ -72,15 +66,34 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
-const CONTENT_BOUNDS = BAY_LAYOUT.reduce(
-  (bounds, bay) => ({
-    minX: Math.min(bounds.minX, bay.x - MEZZ_GAP - MEZZ_WIDTH),
-    minY: Math.min(bounds.minY, bay.y),
-    maxX: Math.max(bounds.maxX, bay.x + bay.width),
-    maxY: Math.max(bounds.maxY, bay.y + bay.height),
-  }),
-  { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
-);
+
+function parseSvgViewBox(markup: string): ViewBox {
+  const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
+  if (!match) throw new Error("building-geometry.svg must define a viewBox");
+
+  const values = match[1].trim().split(/[\s,]+/).map(Number);
+  if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
+    throw new Error("building-geometry.svg viewBox must contain four finite numbers");
+  }
+
+  const [minX, minY, width, height] = values;
+  return { minX, minY, width, height };
+}
+
+function extractSvgBody(markup: string) {
+  const match = markup.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/i);
+  if (!match) throw new Error("building-geometry.svg must contain an <svg> root");
+  return match[1].trim();
+}
+
+const BUILDING_GEOMETRY_VIEWBOX = parseSvgViewBox(buildingGeometrySvg);
+const BUILDING_GEOMETRY_MARKUP = extractSvgBody(buildingGeometrySvg);
+const CONTENT_BOUNDS = {
+  minX: BUILDING_GEOMETRY_VIEWBOX.minX,
+  minY: BUILDING_GEOMETRY_VIEWBOX.minY,
+  maxX: BUILDING_GEOMETRY_VIEWBOX.minX + BUILDING_GEOMETRY_VIEWBOX.width,
+  maxY: BUILDING_GEOMETRY_VIEWBOX.minY + BUILDING_GEOMETRY_VIEWBOX.height,
+};
 const STAGE_BOUNDS = {
   minX: CONTENT_BOUNDS.minX - STAGE_PAD,
   minY: CONTENT_BOUNDS.minY - STAGE_PAD,
@@ -95,17 +108,6 @@ const FULL_VIEWBOX: ViewBox = {
 };
 const MIN_ZOOM_WIDTH = FULL_VIEWBOX.width / 8;
 const MIN_ZOOM_HEIGHT = FULL_VIEWBOX.height / 8;
-
-const FIT_PADDING = 160;
-function fitViewBoxToSvg(svg: SVGSVGElement): ViewBox {
-  const bbox = svg.getBBox();
-  return clampViewBox({
-    minX: bbox.x - FIT_PADDING,
-    minY: bbox.y - FIT_PADDING,
-    width: bbox.width + FIT_PADDING * 2,
-    height: bbox.height + FIT_PADDING * 2,
-  });
-}
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -140,7 +142,7 @@ function tabSortTime(tab: LayoutTab) {
 }
 
 function isNowTab(tab: LayoutTab) {
-  return tab.id === "tab-default" || tab.name === "Now" || tab.name === "Baseline Layout";
+  return tab.id === "tab-default" || tab.name === "Now";
 }
 
 function orderTabs(tabs: LayoutTab[]) {
@@ -179,7 +181,7 @@ function formatKiB(bytes: number) {
 }
 
 function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
-  const isFirstSeed = tab.id === "tab-default" || tab.name === "Baseline Layout";
+  const isFirstSeed = tab.id === "tab-default" || tab.name === "Now";
 
   return {
     ...tab,
@@ -190,7 +192,6 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
     hasLayout: tab.hasLayout ?? true,
     layout: {
       ...tab.layout,
-      bays: BAY_LAYOUT.map((bay) => ({ ...bay })),
       tools: tab.layout.tools.map((tool) => clampTool(tool)),
     },
   };
@@ -248,7 +249,6 @@ function cloneLayoutTab(source: LayoutTab): LayoutTab {
     updatedAt: now,
     layout: {
       ...source.layout,
-      bays: BAY_LAYOUT.map((bay) => ({ ...bay })),
       tools: source.layout.tools.map((tool) => ({
         ...tool,
         id: uid("tool"),
@@ -559,12 +559,6 @@ function App() {
       window.clearTimeout(localWriteTimer.current);
     }
   }, []);
-
-  // Fit to actual SVG content on first render
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (svg) setViewBox(fitViewBoxToSvg(svg));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     paintDeleteZone(deleteProximityRef.current);
@@ -883,17 +877,14 @@ function App() {
       : "none";
     const activeTabBytes = estimateJsonBytes(normalizeTab(activeTab));
     const totalTools = tabs.reduce((count, tab) => count + tab.layout.tools.length, 0);
-    const totalBays = tabs.reduce((count, tab) => count + tab.layout.bays.length, 0);
     const totalBytes = estimateJsonBytes(tabs.map(normalizeTab));
 
     return [
       `selected: ${selected}`,
       `tab tools: ${activeTab.layout.tools.length} / ${VALIDATION_LIMITS.toolsPerTab}`,
-      `tab bays: ${activeTab.layout.bays.length} / ${VALIDATION_LIMITS.baysPerTab}`,
       `tab json: ${formatKiB(activeTabBytes)} / ${formatKiB(VALIDATION_LIMITS.requestBytes)}`,
       `page tabs: ${tabs.length}`,
       `page tools: ${totalTools}`,
-      `page bays: ${totalBays}`,
       `page json: ${formatKiB(totalBytes)}`,
       draggingToolId ? "dragging" : "ready",
     ];
@@ -1014,6 +1005,7 @@ function App() {
     const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
     style.textContent = `
       .infra-layer{display:${showInfra ? "block" : "none"}}
+      .mezzanine-layer{display:${showMezz ? "block" : "none"}}
     `;
     clone.insertBefore(style, clone.firstChild);
     return new XMLSerializer().serializeToString(clone);
@@ -1248,10 +1240,11 @@ function App() {
             isPanning ? "panning" : "",
             gridDark ? "grid-dark" : "",
             showInfra ? "show-infra" : "",
+            showMezz ? "show-mezz" : "",
           ].filter(Boolean).join(" ")}
           viewBox={`${viewBox.minX} ${viewBox.minY} ${viewBox.width} ${viewBox.height}`}
           role="img"
-          aria-label="Bays 105, 108, and 110 with draggable tool shapes"
+          aria-label="Building geometry with draggable tool shapes"
           onWheel={zoomFloorplan}
           onPointerDown={startPan}
           onPointerMove={moveToolDrag}
@@ -1263,7 +1256,7 @@ function App() {
             <pattern id="grid" width="12" height="12" patternUnits="userSpaceOnUse">
               <path d="M 12 0 L 0 0 0 12" fill="none" stroke={`rgba(32,36,39,${gridDark ? "0.1" : "0.08"})`} strokeWidth={0.8} />
             </pattern>
-            <pattern id="bay-grid" width="12" height="12" patternUnits="userSpaceOnUse">
+            <pattern id="stage-grid" width="12" height="12" patternUnits="userSpaceOnUse">
               <path d="M 12 0 L 0 0 0 12" fill="none" stroke="rgba(32,36,39,0.36)" strokeWidth={1.2} />
             </pattern>
           </defs>
@@ -1280,41 +1273,12 @@ function App() {
           </g>
 
 
-          <g id="layer-bays" {...{ "inkscape:label": "bays", "inkscape:groupmode": "layer" }}>
-            {activeTab.layout.bays.map((bay) => (
-              <g key={bay.id} id={bay.id} {...{ "inkscape:label": `bay ${bay.label}` }}>
-                <rect
-                  x={bay.x} y={bay.y} width={bay.width} height={bay.height} rx={2}
-                  fill="#ffffff" stroke="#30383a" strokeWidth={2}
-                />
-                <text x={bay.x + bay.width + 24} y={bay.y + 44} fill="#252b2d" fontSize={34} fontWeight={850} fontFamily="sans-serif">
-                  {bay.label}
-                </text>
-                <text x={bay.x + 24} y={bay.y + bay.height - 22} fill="#697074" fontSize={18} fontWeight={700} fontFamily="sans-serif">
-                  {inchesToFeetInches(bay.width)} x {inchesToFeetInches(bay.height)}
-                </text>
-              </g>
-            ))}
-          </g>
-
-          <g id="layer-infra" className="infra-layer" aria-label="Infrastructure layer" {...{ "inkscape:label": "infrastructure", "inkscape:groupmode": "layer" }}>
-            <path id="infra-electrical" className="infra electrical" d="M -96 180 H 1120" fill="none" stroke="#3d6fd4" strokeWidth={2} strokeDasharray="8 4" strokeLinecap="round" />
-            <path id="infra-gas" className="infra gas" d="M 160 -60 V 1120" fill="none" stroke="#e87c2a" strokeWidth={2} strokeDasharray="12 4" strokeLinecap="round" />
-            <path id="infra-dust" className="infra dust" d="M 660 -48 V 1100 M 520 240 H 1030" fill="none" stroke="#a0522d" strokeWidth={2} strokeDasharray="4 4" strokeLinecap="round" />
-            <circle id="infra-node-electrical" className="infra-node electrical" cx="190" cy="180" r="10" fill="#3d6fd4" stroke="none" />
-            <circle id="infra-node-gas" className="infra-node gas" cx="160" cy="520" r="10" fill="#e87c2a" stroke="none" />
-            <circle id="infra-node-dust" className="infra-node dust" cx="660" cy="240" r="10" fill="#a0522d" stroke="none" />
-          </g>
-
-          <g id="layer-mezzanine" className="mezzanine-layer" aria-label="Mezzanine layer" {...{ "inkscape:label": "mezzanine", "inkscape:groupmode": "layer" }}>
-            {showMezz && BAY_LAYOUT.map(bay => (
-              <g key={`mezz-${bay.id}`} id={`mezz-${bay.id}`} transform={`translate(${bay.x - MEZZ_GAP - MEZZ_WIDTH} ${bay.y + (bay.height - MEZZ_WIDTH) / 2})`}>
-                <rect width={MEZZ_WIDTH} height={MEZZ_WIDTH} fill="#ffffff" stroke="#30383a" strokeWidth={2} rx={2} />
-                <path d={`M 0 0 L ${MEZZ_WIDTH} ${MEZZ_WIDTH} M ${MEZZ_WIDTH} 0 L 0 ${MEZZ_WIDTH}`} stroke="#30383a" strokeWidth={1} opacity={0.6} />
-                <text x={MEZZ_WIDTH / 2} y={MEZZ_WIDTH / 2} dominantBaseline="middle" textAnchor="middle" fill="#252b2d" fontSize={24} fontWeight={800} style={{ pointerEvents: "none", userSelect: "none" }}>MEZZ</text>
-              </g>
-            ))}
-          </g>
+          <g
+            id="layer-building-geometry-source"
+            className="base-svg-layer"
+            aria-label="Shared building geometry"
+            dangerouslySetInnerHTML={{ __html: BUILDING_GEOMETRY_MARKUP }}
+          />
 
           <g id="layer-grid-overlay" className="grid-layer" aria-label="Grid overlay layer">
             {gridDark && (
@@ -1323,7 +1287,7 @@ function App() {
                 y={STAGE_BOUNDS.minY}
                 width={STAGE_BOUNDS.maxX - STAGE_BOUNDS.minX}
                 height={STAGE_BOUNDS.maxY - STAGE_BOUNDS.minY}
-                fill="url(#bay-grid)"
+                fill="url(#stage-grid)"
                 style={{ pointerEvents: "none" }}
               />
             )}
@@ -1544,7 +1508,7 @@ function App() {
                   </svg>
                 </div>
                 <h3>Scroll to zoom</h3>
-                <p>Use your mouse wheel to zoom in and out of the bays.</p>
+                <p>Use your mouse wheel to zoom in and out of the drawing.</p>
               </>
             )}
             {tutorialStep === "rotate" && (

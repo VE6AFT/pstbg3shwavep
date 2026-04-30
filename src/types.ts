@@ -1,12 +1,3 @@
-export type Bay = {
-  id: string;
-  label: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
 export type ToolShape = {
   id: string;
   assetId: string;
@@ -39,7 +30,6 @@ export type ToolShape = {
 
 export type Layout = {
   unit: "in";
-  bays: Bay[];
   tools: ToolShape[];
 };
 

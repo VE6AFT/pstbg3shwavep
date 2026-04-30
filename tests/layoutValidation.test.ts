@@ -31,15 +31,12 @@ function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
     id: "tab-default",
-    name: "Baseline Layout",
+    name: "Now",
     authorId: "user-local",
     clonedFromId: null,
     clonedFromName: null,
     layout: {
       unit: "in",
-      bays: [
-        { id: "bay-105", label: "105", x: 0, y: 0, width: 444, height: 1188 },
-      ],
       tools: [makeTool()],
     },
     ...overrides,
@@ -59,7 +56,7 @@ describe("layout tab validation", () => {
     const tab = parseLayoutTabValue(makeTab());
 
     expect(tab.id).toBe("tab-default");
-    expect(tab.name).toBe("Baseline Layout");
+    expect(tab.name).toBe("Now");
     expect(tab.layout.unit).toBe("in");
     expect(tab.layout.tools[0].scope).toBe("wood");
     expect(tab.layout.tools[0].hazards).toEqual(["dust", "noise"]);
@@ -81,20 +78,12 @@ describe("layout tab validation", () => {
     expect("privateNote" in tab.layout.tools[0]).toBe(false);
   });
 
-  it("rejects too many tools or bays", () => {
+  it("rejects too many tools", () => {
     const tools = Array.from({ length: VALIDATION_LIMITS.toolsPerTab + 1 }, (_, index) =>
       makeTool({ id: `tool-${index}` }),
     );
-    const bays = Array.from({ length: VALIDATION_LIMITS.baysPerTab + 1 }, (_, index) => ({
-      id: `bay-${index}`,
-      label: `${index}`,
-      x: 0,
-      y: 0,
-      width: 10,
-      height: 10,
-    }));
 
-    expect(() => parseLayoutTabValue(makeTab({ layout: { unit: "in", bays, tools } }))).toThrow(ValidationError);
+    expect(() => parseLayoutTabValue(makeTab({ layout: { unit: "in", tools } }))).toThrow(ValidationError);
   });
 
   it("rejects oversized JSON before parsing", async () => {
@@ -116,7 +105,6 @@ describe("layout tab validation", () => {
           name: "",
           layout: {
             unit: "in",
-            bays: [{ id: "bay-1", label: "105", x: Number.NaN, y: 0, width: 10, height: 10 }],
             tools: [
               makeTool({
                 color: "tomato",
