@@ -14,7 +14,6 @@
     "db:migrate": "npx wrangler d1 execute makerspace_floorplan --remote --file=./schema.sql"
   },
   "dependencies": {
-    "interactjs": "^1.10.27",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

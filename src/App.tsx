@@ -195,7 +195,6 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
     name: isFirstSeed ? "Now" : tab.name || `Sheet ${index + 1}`,
     clonedFromId: tab.clonedFromId ?? null,
     clonedFromName: tab.clonedFromName ?? null,
-    baseSvgMarkup: tab.baseSvgMarkup ?? null,
     canEdit: tab.canEdit ?? false,
     hasLayout: tab.hasLayout ?? true,
     layout: {
@@ -351,7 +350,6 @@ function mergeTabSummaries(summaries: LayoutTab[], currentTabs: LayoutTab[]) {
     if (!current || current.hasLayout === false || current.updatedAt !== normalized.updatedAt) return normalized;
     return {
       ...normalized,
-      baseSvgMarkup: current.baseSvgMarkup ?? normalized.baseSvgMarkup,
       layout: current.layout,
       hasLayout: true,
     };
@@ -416,25 +414,6 @@ const SCOPE_COLORS = {
   blue: "#0000ff",
 } as const;
 
-const SyncIcon = ({ state }: { state: SyncState }) => {
-  if (state === "idle" || state === "offline" || state === "error") {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-        <polyline points="17 21 17 13 7 13 7 21"></polyline>
-        <polyline points="7 3 7 8 15 8"></polyline>
-      </svg>
-    );
-  }
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-    </svg>
-  );
-};
-
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
   const [tabs, setTabs] = useState<LayoutTab[]>(() => loadCachedTabs() ?? orderTabs(seedTabs.map(normalizeTab)));
@@ -466,7 +445,6 @@ function App() {
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
   const debugLogRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
@@ -503,9 +481,6 @@ function App() {
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
-  const baseSvgDataUrl = activeTab.baseSvgMarkup
-    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(activeTab.baseSvgMarkup)}`
-    : null;
 
   const canEdit = activeTabHasLayout && (showDebug || activeTab.canEdit === true || activeTab.authorId === localUserId);
 
@@ -1157,28 +1132,6 @@ function App() {
     image.src = url;
   };
 
-  const importBaseSvg = (file: File | undefined) => {
-    if (!file) return;
-    file.text().then((markup) => {
-      let nowTabId = activeTabId;
-      setTabs((current) =>
-        current.map((tab) => {
-          if (tab.name === "Now") {
-            nowTabId = tab.id;
-            return {
-              ...tab,
-              baseSvgMarkup: markup,
-              updatedAt: new Date().toISOString(),
-            };
-          }
-          return tab;
-        }),
-      );
-      markTabDirty(nowTabId, "Imported base SVG");
-      pushDebugEvent("import svg");
-    });
-  };
-
   const handleAddToolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const w = parseFeetInches(addToolForm.x);
@@ -1268,9 +1221,6 @@ function App() {
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
-              <button type="button" className="debug-clear" onClick={() => importInputRef.current?.click()}>
-                svg<br />import
-              </button>
               <button type="button" className="debug-clear" onClick={clearLocalDraft}>
                 clear<br />local
               </button>
@@ -1297,13 +1247,6 @@ function App() {
             {debugLines.map((line) => (
               <span key={line}>{line}</span>
             ))}
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".svg,image/svg+xml"
-              hidden
-              onChange={(event) => importBaseSvg(event.target.files?.[0])}
-            />
             <div ref={debugLogRef} className="debug-log" aria-label="Database write log">
               {debugEvents.map((event) => (
                 <span key={event.id}>{event.message}</span>

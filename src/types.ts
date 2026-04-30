@@ -51,7 +51,6 @@ export type LayoutTab = {
   hasLayout?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
-  baseSvgMarkup?: string | null;
   layout: Layout;
   createdAt?: string;
   updatedAt?: string;

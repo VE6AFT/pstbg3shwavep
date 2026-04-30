@@ -35,7 +35,6 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
     authorId: "user-local",
     clonedFromId: null,
     clonedFromName: null,
-    baseSvgMarkup: null,
     layout: {
       unit: "in",
       bays: [

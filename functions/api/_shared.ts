@@ -55,7 +55,6 @@ export type LayoutTab = {
   hasLayout?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
-  baseSvgMarkup?: string | null;
   layout: Layout;
   createdAt?: string;
   updatedAt?: string;
@@ -83,7 +82,6 @@ export const VALIDATION_LIMITS = {
   toolIdChars: 96,
   toolAssetIdChars: 128,
   toolNameChars: 80,
-  baseSvgMarkupChars: 128 * 1024,
   baysPerTab: 50,
   toolsPerTab: 500,
   minCoordinate: -100000,
@@ -231,7 +229,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
     authorId: readNullableId(tab.authorId, `${path}.authorId`, VALIDATION_LIMITS.authorIdChars, details),
     clonedFromId: readNullableId(tab.clonedFromId, `${path}.clonedFromId`, VALIDATION_LIMITS.authorIdChars, details),
     clonedFromName: readNullableString(tab.clonedFromName, `${path}.clonedFromName`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
-    baseSvgMarkup: readNullableString(tab.baseSvgMarkup, `${path}.baseSvgMarkup`, VALIDATION_LIMITS.baseSvgMarkupChars, details),
     layout: {
       unit: "in",
       bays: [],
