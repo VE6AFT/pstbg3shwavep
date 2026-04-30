@@ -4,5 +4,5 @@ pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "makerspace_floorplan"
-database_id = "ec3d6ab7-e778-4033-9857-d15aa6662acb"
+database_name = "pstbg3shwavep"
+database_id = "8b8c3911-b95d-4e69-90fb-588cff3c5c2c"

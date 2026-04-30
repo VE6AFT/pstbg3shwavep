@@ -13,8 +13,8 @@ import { seedTabs } from "./seed";
 import type { Bay, LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
-const STORAGE_KEY = "makerspace-floorplan-tabs-v3";
-const ACTIVE_TAB_STORAGE_KEY = "makerspace-floorplan-active-tab";
+const STORAGE_KEY = "pstbg3shwavep-tabs";
+const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const LOCAL_WRITE_DELAY_MS = 2500;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 
@@ -106,7 +106,7 @@ function uid(prefix: string) {
 }
 
 function getOrCreateUserId() {
-  const key = "makerspace-floorplan-user-id";
+  const key = "pstbg3shwavep-user-id";
   let id = localStorage.getItem(key);
   if (!id) {
     id = uid("user");
@@ -899,14 +899,14 @@ function App() {
     setSelectedToolId(null);
     pushDebugEvent("clone start");
 
-    if (!localStorage.getItem("makerspace-tutorial-seen")) {
+    if (!localStorage.getItem("pstbg3shwavep-tutorial-seen")) {
       setTutorialStep("zoom");
-      localStorage.setItem("makerspace-tutorial-seen", "true");
+      localStorage.setItem("pstbg3shwavep-tutorial-seen", "true");
     }
 
     try {
       const { tab } = await persistClone(clone, localUserId);
-        setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? normalizeTab(tab) : item))));
+      setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? normalizeTab(tab) : item))));
       pushDebugEvent("clone ok");
     } catch (err) {
       if (err instanceof LimitError) {
@@ -974,8 +974,7 @@ function App() {
   const clearLocalDraft = () => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
-    localStorage.removeItem("makerspace-floorplan-tabs-v2");
-    localStorage.removeItem("makerspace-tutorial-seen");
+    localStorage.removeItem("pstbg3shwavep-tutorial-seen");
     const freshTabs = orderTabs(seedTabs.map(normalizeTab));
     setTabs(freshTabs);
     setActiveTabId(freshTabs[0].id);
@@ -1095,7 +1094,7 @@ function App() {
     <main className="app-shell">
       <section
         className="workspace"
-        aria-label="Makerspace floorplan editor"
+        aria-label="Protospace Space Board The Board Game 3, Space Hard With A Vengeance Expansion Pack"
         tabIndex={0}
         onKeyDown={catchDebugCode}
       >

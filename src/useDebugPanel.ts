@@ -26,7 +26,7 @@ export function useDebugPanel() {
   const [isVisible, setIsVisible] = useState(false);
   const [editOverride, setEditOverride] = useState(false);
   const [events, setEvents] = useState<DebugEvent[]>(() => [
-    { id: uid("debug"), message: `${formatDebugTime()} boot localStorage:makerspace-floorplan-tabs-v3` },
+    { id: uid("debug"), message: `${formatDebugTime()} boot localStorage:pstbg3shwavep-tabs` },
   ]);
   const logRef = useRef<HTMLDivElement | null>(null);
   const codeBuffer = useRef("");

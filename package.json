@@ -8,10 +8,10 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
-    "cf:dev": "npx wrangler pages dev dist --d1 DB=makerspace_floorplan",
-    "db:migrate:local": "npx wrangler d1 execute makerspace_floorplan --local --file=./schema.sql",
-    "db:seed:local": "npx wrangler d1 execute makerspace_floorplan --local --file=./seed.sql",
-    "db:migrate": "npx wrangler d1 execute makerspace_floorplan --remote --file=./schema.sql"
+    "cf:dev": "npx wrangler pages dev dist --d1 DB=pstbg3shwavep",
+    "db:migrate:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./schema.sql",
+    "db:seed:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./seed.sql",
+    "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --file=./schema.sql"
   },
   "dependencies": {
     "react": "^19.0.0",
