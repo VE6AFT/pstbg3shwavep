@@ -13,6 +13,8 @@ import type { Bay, LayoutTab, SaveResponse, ToolShape } from "./types";
 
 const STORAGE_KEY = "makerspace-floorplan-tabs-v3";
 const ACTIVE_TAB_STORAGE_KEY = "makerspace-floorplan-active-tab";
+const LOCAL_WRITE_DELAY_MS = 2500;
+const DEFAULT_SAVE_DELAY_MS = 5000;
 
 const BAY_LAYOUT: Bay[] = [
   { id: "bay-105", label: "105", x: 0, y: 0, width: 1188, height: 444 },
@@ -27,6 +29,17 @@ type DragState = {
   toolId: string;
   offsetX: number;
   offsetY: number;
+  originalX: number;
+  originalY: number;
+  latestX: number;
+  latestY: number;
+  width: number;
+  height: number;
+  rotation: number;
+  element: SVGGElement;
+  inverseScreenMatrix: DOMMatrix;
+  deleteZoneCenter: { x: number; y: number } | null;
+  isOverDelete: boolean;
 } | null;
 type ViewBox = {
   minX: number;
@@ -39,6 +52,8 @@ type PanState = {
   startClientX: number;
   startClientY: number;
   startViewBox: ViewBox;
+  svgWidth: number;
+  svgHeight: number;
 } | null;
 type ClonePrompt = {
   tabId: string;
@@ -194,12 +209,27 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function clampToolPosition(tool: Pick<ToolShape, "width" | "height">, x: number, y: number) {
+  return {
+    x: clamp(x, STAGE_BOUNDS.minX, STAGE_BOUNDS.maxX - tool.width),
+    y: clamp(y, STAGE_BOUNDS.minY, STAGE_BOUNDS.maxY - tool.height),
+  };
+}
+
 function clampTool(tool: ToolShape): ToolShape {
+  const position = clampToolPosition(tool, tool.x, tool.y);
   return {
     ...tool,
-    x: clamp(tool.x, STAGE_BOUNDS.minX, STAGE_BOUNDS.maxX - tool.width),
-    y: clamp(tool.y, STAGE_BOUNDS.minY, STAGE_BOUNDS.maxY - tool.height),
+    ...position,
   };
+}
+
+function toolTransform(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "rotation">) {
+  return `translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`;
+}
+
+function svgPointFromMatrix(matrix: DOMMatrix, clientX: number, clientY: number) {
+  return new DOMPoint(clientX, clientY).matrixTransform(matrix);
 }
 
 function clampViewBox(viewBox: ViewBox): ViewBox {
@@ -417,12 +447,14 @@ function App() {
   const dragState = useRef<DragState>(null);
   const panState = useRef<PanState>(null);
   const saveTimer = useRef<number | null>(null);
+  const localWriteTimer = useRef<number | null>(null);
   const pendingSaveTabId = useRef<string | null>(null);
-  const saveDelayMs = useRef<number>(650);
+  const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const debugCodeBuffer = useRef("");
   const [tutorialStep, setTutorialStep] = useState<null | "zoom" | "rotate" | "delete" | "add" | "rename">(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [deleteProximity, setDeleteProximity] = useState(0);
+  const deleteProximityRef = useRef(0);
   const [dbDisabled, setDbDisabled] = useState(false);
   const [localWriteDisabled, setLocalWriteDisabled] = useState(false);
   const tabsRef = useRef<LayoutTab[]>(tabs);
@@ -476,37 +508,22 @@ function App() {
     ]);
   }, []);
 
-  const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = 650) => {
+  const paintDeleteZone = useCallback((level: number) => {
+    deleteProximityRef.current = level;
+    const zone = deleteZoneRef.current;
+    if (!zone) return;
+    const visibleLevel = Math.max(level, tutorialStep === "delete" ? 1 : 0);
+    zone.style.background = `rgb(${203 - (203 - 239) * visibleLevel}, ${213 - (213 - 68) * visibleLevel}, ${225 - (225 - 68) * visibleLevel})`;
+    zone.classList.toggle("shaking", level === 1);
+  }, [tutorialStep]);
+
+  const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS) => {
     pendingSaveTabId.current = tabId;
     saveDelayMs.current = delayMs;
     setSyncState("saving");
     setSyncMessage(message);
     pushDebugEvent("queued write");
   }, [pushDebugEvent]);
-
-  const setToolPosition = useCallback((toolId: string, x: number, y: number) => {
-    setTabs((current) =>
-      current.map((tab) => {
-        if (tab.id !== activeTabId) return tab;
-        return {
-          ...tab,
-          layout: {
-            ...tab.layout,
-            tools: tab.layout.tools.map((tool) =>
-              tool.id === toolId
-                ? clampTool({
-                  ...tool,
-                  x,
-                  y,
-                })
-                : tool,
-            ),
-          },
-          updatedAt: new Date().toISOString(),
-        };
-      }),
-    );
-  }, [activeTabId, markTabDirty]);
 
   const getSvgPoint = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -582,7 +599,17 @@ function App() {
     if (flashTimerRef.current) {
       window.clearTimeout(flashTimerRef.current);
     }
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+    }
+    if (localWriteTimer.current) {
+      window.clearTimeout(localWriteTimer.current);
+    }
   }, []);
+
+  useEffect(() => {
+    paintDeleteZone(deleteProximityRef.current);
+  }, [paintDeleteZone]);
 
   useEffect(() => {
     if (showAddTool && tutorialStep === "add") {
@@ -628,19 +655,30 @@ function App() {
   }, [tabs]);
 
   useEffect(() => {
-    if (localWriteDisabled || !tabs.some((tab) => tab.id === activeTabId)) return;
+    if (localWriteDisabled || !tabsRef.current.some((tab) => tab.id === activeTabId)) return;
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
-  }, [activeTabId, tabs, localWriteDisabled]);
+  }, [activeTabId, localWriteDisabled]);
 
   useEffect(() => {
-    if (!localWriteDisabled) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(orderTabs(tabs.map(normalizeTab))));
+    if (localWriteDisabled) {
+      if (localWriteTimer.current) {
+        window.clearTimeout(localWriteTimer.current);
+        localWriteTimer.current = null;
+      }
+    } else {
+      if (localWriteTimer.current) {
+        window.clearTimeout(localWriteTimer.current);
+      }
+      localWriteTimer.current = window.setTimeout(() => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(orderTabs(tabsRef.current.map(normalizeTab))));
+        localWriteTimer.current = null;
+      }, LOCAL_WRITE_DELAY_MS);
     }
     if (!initialized.current) return;
     if (pendingSaveTabId.current) {
       scheduleSave(pendingSaveTabId.current, saveDelayMs.current);
       pendingSaveTabId.current = null;
-      saveDelayMs.current = 650;
+      saveDelayMs.current = DEFAULT_SAVE_DELAY_MS;
     }
   }, [scheduleSave, tabs, localWriteDisabled]);
 
@@ -675,21 +713,38 @@ function App() {
               ...tab.layout,
               tools: tab.layout.tools.map((t) => (t.id === tool.id ? { ...t, rotation: (t.rotation + 45) % 360 } : t)),
             },
+            updatedAt: new Date().toISOString(),
           };
         }),
       );
-      markTabDirty(activeTabId, "Saving in background", 2000);
+      markTabDirty(activeTabId, "Saving in background");
       return;
     }
 
-    const local = getSvgPoint(event.clientX, event.clientY);
+    const matrix = svgRef.current?.getScreenCTM()?.inverse();
+    if (!matrix) return;
+    const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
     if (!local) return;
+    const deleteRect = deleteZoneRef.current?.getBoundingClientRect();
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
       toolId: tool.id,
       offsetX: local.x - tool.x,
       offsetY: local.y - tool.y,
+      originalX: tool.x,
+      originalY: tool.y,
+      latestX: tool.x,
+      latestY: tool.y,
+      width: tool.width,
+      height: tool.height,
+      rotation: tool.rotation,
+      element: event.currentTarget,
+      inverseScreenMatrix: matrix,
+      deleteZoneCenter: deleteRect
+        ? { x: deleteRect.left + deleteRect.width / 2, y: deleteRect.top + deleteRect.height / 2 }
+        : null,
+      isOverDelete: false,
     };
     setSelectedToolId(tool.id);
     setDraggingToolId(tool.id);
@@ -698,31 +753,34 @@ function App() {
   const moveToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
-      const local = getSvgPoint(event.clientX, event.clientY);
-      if (!local) return;
-      setToolPosition(current.toolId, local.x - current.offsetX, local.y - current.offsetY);
+      const local = svgPointFromMatrix(current.inverseScreenMatrix, event.clientX, event.clientY);
+      const next = clampToolPosition(current, local.x - current.offsetX, local.y - current.offsetY);
+      current.latestX = next.x;
+      current.latestY = next.y;
+      current.element.setAttribute(
+        "transform",
+        toolTransform({
+          x: next.x,
+          y: next.y,
+          width: current.width,
+          height: current.height,
+          rotation: current.rotation,
+        }),
+      );
 
-      // Calculate proximity to delete zone
-      const dz = deleteZoneRef.current;
-      if (dz) {
-        const rect = dz.getBoundingClientRect();
-        const dzCenterX = rect.left + rect.width / 2;
-        const dzCenterY = rect.top + rect.height / 2;
-        const dist = Math.hypot(event.clientX - dzCenterX, event.clientY - dzCenterY);
-
-        const maxDist = 300;
-        const prox = Math.max(0, 1 - dist / maxDist);
-        setDeleteProximity(dist < 32 ? 1 : prox);
+      if (current.deleteZoneCenter) {
+        const dist = Math.hypot(event.clientX - current.deleteZoneCenter.x, event.clientY - current.deleteZoneCenter.y);
+        const nextProximity = dist < 32 ? 1 : Math.max(0, 1 - dist / 300);
+        current.isOverDelete = nextProximity === 1;
+        paintDeleteZone(nextProximity);
       }
       return;
     }
 
     const pan = panState.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const dx = (event.clientX - pan.startClientX) * (pan.startViewBox.width / rect.width);
-    const dy = (event.clientY - pan.startClientY) * (pan.startViewBox.height / rect.height);
+    const dx = (event.clientX - pan.startClientX) * (pan.startViewBox.width / pan.svgWidth);
+    const dy = (event.clientY - pan.startClientY) * (pan.startViewBox.height / pan.svgHeight);
     setViewBox(
       clampViewBox({
         ...pan.startViewBox,
@@ -739,8 +797,7 @@ function App() {
       svgRef.current?.releasePointerCapture(event.pointerId);
       setDraggingToolId(null);
 
-      // Check if released over the delete zone
-      if (deleteProximity === 1) {
+      if (current.isOverDelete) {
         setTabs((currentTabs) =>
           currentTabs.map((tab) => {
             if (tab.id !== activeTabId) return tab;
@@ -756,8 +813,33 @@ function App() {
         );
         markTabDirty(activeTabId, "Deleted tool");
       } else {
-        markTabDirty(activeTabId, "Moved tool");
+        const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
+        if (moved) {
+          setTabs((currentTabs) =>
+            currentTabs.map((tab) => {
+              if (tab.id !== activeTabId) return tab;
+              return {
+                ...tab,
+                layout: {
+                  ...tab.layout,
+                  tools: tab.layout.tools.map((tool) =>
+                    tool.id === current.toolId
+                      ? {
+                        ...tool,
+                        x: current.latestX,
+                        y: current.latestY,
+                      }
+                      : tool,
+                  ),
+                },
+                updatedAt: new Date().toISOString(),
+              };
+            }),
+          );
+          markTabDirty(activeTabId, "Moved tool");
+        }
       }
+      paintDeleteZone(0);
       setDeleteProximity(0);
     }
 
@@ -776,12 +858,16 @@ function App() {
       return;
     }
     if (event.target instanceof Element && event.target.closest(".tool-node")) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
     svgRef.current?.setPointerCapture(event.pointerId);
     panState.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
       startViewBox: viewBox,
+      svgWidth: rect.width,
+      svgHeight: rect.height,
     };
     setIsPanning(true);
   };
@@ -1363,7 +1449,7 @@ function App() {
                   ].filter(Boolean).join(" ")}
                   style={{ color: tool.color }}
                   data-tool-id={tool.id}
-                  transform={`translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`}
+                  transform={toolTransform(tool)}
                   onPointerDown={(event) => startToolDrag(event, tool)}
                 >
                   <rect width={tool.width} height={tool.height} rx={0} fill={tool.color} fillOpacity={0.12} stroke={tool.color} strokeWidth={1.5} />
