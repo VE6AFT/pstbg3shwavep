@@ -1525,7 +1525,7 @@ function App() {
                   </svg>
                 </div>
                 <h3>Scroll to zoom</h3>
-                <p>Use your mouse wheel to zoom in and out of the floorplan.</p>
+                <p>Use your mouse wheel to zoom in and out of the bays.</p>
               </>
             )}
             {tutorialStep === "rotate" && (
