@@ -670,7 +670,10 @@ function App() {
         window.clearTimeout(localWriteTimer.current);
       }
       localWriteTimer.current = window.setTimeout(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(orderTabs(tabsRef.current.map(normalizeTab))));
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(orderTabs(tabsRef.current.map(normalizeTab))),
+        );
         localWriteTimer.current = null;
       }, LOCAL_WRITE_DELAY_MS);
     }

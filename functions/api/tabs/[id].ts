@@ -64,6 +64,10 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, 
     }
 
     const authorId = readAuthorIdHeader(request);
+    if (!authorId) {
+      return json({ error: "Missing author id" }, { status: 400 });
+    }
+
     const existing = await env.DB.prepare("SELECT author_id FROM tabs WHERE id = ?").bind(params.id).first<{ author_id: string | null }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to delete this tab" }, { status: 403 });

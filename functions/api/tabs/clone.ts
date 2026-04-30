@@ -27,12 +27,12 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       return json({ error: "Missing author id" }, { status: 400 });
     }
 
-    const countRow = await env.DB
-      .prepare(`SELECT COUNT(*) AS cnt FROM tabs WHERE author_id = ?`)
-      .bind(authorId)
-      .first<{ cnt: number }>();
+    const limitRow = await env.DB
+      .prepare(`SELECT 1 AS hit FROM tabs WHERE author_id = ? LIMIT 1 OFFSET ?`)
+      .bind(authorId, TAB_LIMIT - 1)
+      .first<{ hit: number }>();
 
-    if ((countRow?.cnt ?? 0) >= TAB_LIMIT) {
+    if (limitRow) {
       return json(
         { error: `tab limit reached (${TAB_LIMIT} max per user)` },
         { status: 429 },
