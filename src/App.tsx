@@ -15,8 +15,18 @@ import { useDebugPanel } from "./useDebugPanel";
 
 const STORAGE_KEY = "pstbg3shwavep-tabs";
 const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
+const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 2500;
 const DEFAULT_SAVE_DELAY_MS = 5000;
+
+function loadControls() {
+  try {
+    const raw = localStorage.getItem(CONTROLS_STORAGE_KEY);
+    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; showInfra?: boolean; showMezz?: boolean };
+  } catch {
+    return {};
+  }
+}
 
 const BAY_LAYOUT: Bay[] = [
   { id: "bay-105", label: "105", x: 0, y: 0, width: 1188, height: 444 },
@@ -400,9 +410,9 @@ function App() {
   const [tabs, setTabs] = useState<LayoutTab[]>(() => loadCachedTabs() ?? orderTabs(seedTabs.map(normalizeTab)));
   const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId(tabs) ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
-  const [gridDark, setGridDark] = useState(true);
-  const [showInfra, setShowInfra] = useState(false);
-  const [showMezz, setShowMezz] = useState(true);
+  const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
+  const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? false);
+  const [showMezz, setShowMezz] = useState(() => loadControls().showMezz ?? true);
   const debugPanel = useDebugPanel();
   const [showAddTool, setShowAddTool] = useState(false);
   const [addToolForm, setAddToolForm] = useState({
@@ -626,6 +636,13 @@ function App() {
     if (!tabsRef.current.some((tab) => tab.id === activeTabId)) return;
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
   }, [activeTabId]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      CONTROLS_STORAGE_KEY,
+      JSON.stringify({ gridDark, showInfra, showMezz })
+    );
+  }, [gridDark, showInfra, showMezz]);
 
   useEffect(() => {
     if (localWriteTimer.current) {
