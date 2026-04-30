@@ -398,7 +398,7 @@ const SCOPE_COLORS = {
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
   const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(seedTabs.map(normalizeTab)));
-  const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId(tabs) ?? tabs[0]?.id ?? seedTabs[0].id);
+  const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
   const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? false);
@@ -666,7 +666,7 @@ function App() {
   useEffect(() => {
     if (!tabsRef.current.some((tab) => tab.id === activeTabId)) return;
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
-  }, [activeTabId]);
+  }, [activeTabId, tabs.length]);
 
   useEffect(() => {
     localStorage.setItem(
