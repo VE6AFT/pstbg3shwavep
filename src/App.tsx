@@ -23,7 +23,9 @@ const BAY_LAYOUT: Bay[] = [
   { id: "bay-108", label: "108", x: 0, y: 516, width: 1164, height: 324 },
   { id: "bay-110", label: "110", x: 0, y: 840, width: 1164, height: 324 },
 ];
-const STAGING_MARGIN = BAY_LAYOUT[0].width / 2;
+const MEZZ_WIDTH = 360;
+const MEZZ_GAP = 24; // 2ft gap between mezz and bay
+const STAGE_PAD = 200;
 
 type DragState = {
   pointerId: number;
@@ -60,9 +62,9 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
-const BAY_BOUNDS = BAY_LAYOUT.reduce(
+const CONTENT_BOUNDS = BAY_LAYOUT.reduce(
   (bounds, bay) => ({
-    minX: Math.min(bounds.minX, bay.x, -744), // Include mezzanine area
+    minX: Math.min(bounds.minX, bay.x - MEZZ_GAP - MEZZ_WIDTH),
     minY: Math.min(bounds.minY, bay.y),
     maxX: Math.max(bounds.maxX, bay.x + bay.width),
     maxY: Math.max(bounds.maxY, bay.y + bay.height),
@@ -70,10 +72,10 @@ const BAY_BOUNDS = BAY_LAYOUT.reduce(
   { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
 );
 const STAGE_BOUNDS = {
-  minX: BAY_BOUNDS.minX - STAGING_MARGIN,
-  minY: BAY_BOUNDS.minY - STAGING_MARGIN,
-  maxX: BAY_BOUNDS.maxX + STAGING_MARGIN,
-  maxY: BAY_BOUNDS.maxY + STAGING_MARGIN,
+  minX: CONTENT_BOUNDS.minX - STAGE_PAD,
+  minY: CONTENT_BOUNDS.minY - STAGE_PAD,
+  maxX: CONTENT_BOUNDS.maxX + STAGE_PAD,
+  maxY: CONTENT_BOUNDS.maxY + STAGE_PAD,
 };
 const FULL_VIEWBOX: ViewBox = {
   minX: STAGE_BOUNDS.minX,
@@ -81,25 +83,19 @@ const FULL_VIEWBOX: ViewBox = {
   width: STAGE_BOUNDS.maxX - STAGE_BOUNDS.minX,
   height: STAGE_BOUNDS.maxY - STAGE_BOUNDS.minY,
 };
-
-const BAYS_ONLY_BOUNDS = BAY_LAYOUT.reduce(
-  (bounds, bay) => ({
-    minX: Math.min(bounds.minX, bay.x),
-    minY: Math.min(bounds.minY, bay.y),
-    maxX: Math.max(bounds.maxX, bay.x + bay.width),
-    maxY: Math.max(bounds.maxY, bay.y + bay.height),
-  }),
-  { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
-);
-
-const FIT_BAYS_VIEWBOX: ViewBox = {
-  minX: BAYS_ONLY_BOUNDS.minX - 160,
-  minY: BAYS_ONLY_BOUNDS.minY - 160,
-  width: (BAYS_ONLY_BOUNDS.maxX - BAYS_ONLY_BOUNDS.minX) + 320,
-  height: (BAYS_ONLY_BOUNDS.maxY - BAYS_ONLY_BOUNDS.minY) + 320,
-};
 const MIN_ZOOM_WIDTH = FULL_VIEWBOX.width / 8;
 const MIN_ZOOM_HEIGHT = FULL_VIEWBOX.height / 8;
+
+const FIT_PADDING = 160;
+function fitViewBoxToSvg(svg: SVGSVGElement): ViewBox {
+  const bbox = svg.getBBox();
+  return clampViewBox({
+    minX: bbox.x - FIT_PADDING,
+    minY: bbox.y - FIT_PADDING,
+    width: bbox.width + FIT_PADDING * 2,
+    height: bbox.height + FIT_PADDING * 2,
+  });
+}
 
 function uid(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -419,7 +415,7 @@ function App() {
   const [addToolErrors, setAddToolErrors] = useState<Record<string, boolean>>({});
   const [draggingToolId, setDraggingToolId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
-  const [viewBox, setViewBox] = useState<ViewBox>(FIT_BAYS_VIEWBOX);
+  const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
@@ -553,6 +549,12 @@ function App() {
       window.clearTimeout(localWriteTimer.current);
     }
   }, []);
+
+  // Fit to actual SVG content on first render
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (svg) setViewBox(fitViewBoxToSvg(svg));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     paintDeleteZone(deleteProximityRef.current);
@@ -1289,10 +1291,10 @@ function App() {
 
           <g id="layer-mezzanine" className="mezzanine-layer" aria-label="Mezzanine layer" {...{ "inkscape:label": "mezzanine", "inkscape:groupmode": "layer" }}>
             {showMezz && BAY_LAYOUT.map(bay => (
-              <g key={`mezz-${bay.id}`} id={`mezz-${bay.id}`} transform={`translate(${-384} ${bay.y + (bay.height - 360) / 2})`}>
-                <rect width={360} height={360} fill="#ffffff" stroke="#30383a" strokeWidth={2} rx={2} />
-                <path d="M 0 0 L 360 360 M 360 0 L 0 360" stroke="#30383a" strokeWidth={1} opacity={0.6} />
-                <text x={180} y={180} dominantBaseline="middle" textAnchor="middle" fill="#252b2d" fontSize={24} fontWeight={800} style={{ pointerEvents: "none", userSelect: "none" }}>MEZZ</text>
+              <g key={`mezz-${bay.id}`} id={`mezz-${bay.id}`} transform={`translate(${bay.x - MEZZ_GAP - MEZZ_WIDTH} ${bay.y + (bay.height - MEZZ_WIDTH) / 2})`}>
+                <rect width={MEZZ_WIDTH} height={MEZZ_WIDTH} fill="#ffffff" stroke="#30383a" strokeWidth={2} rx={2} />
+                <path d={`M 0 0 L ${MEZZ_WIDTH} ${MEZZ_WIDTH} M ${MEZZ_WIDTH} 0 L 0 ${MEZZ_WIDTH}`} stroke="#30383a" strokeWidth={1} opacity={0.6} />
+                <text x={MEZZ_WIDTH / 2} y={MEZZ_WIDTH / 2} dominantBaseline="middle" textAnchor="middle" fill="#252b2d" fontSize={24} fontWeight={800} style={{ pointerEvents: "none", userSelect: "none" }}>MEZZ</text>
               </g>
             ))}
           </g>
