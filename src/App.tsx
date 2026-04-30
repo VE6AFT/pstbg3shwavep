@@ -8,8 +8,10 @@ import {
   useState,
 } from "react";
 import { VALIDATION_LIMITS } from "../functions/api/_shared";
+import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
 import type { Bay, LayoutTab, SaveResponse, ToolShape } from "./types";
+import { useDebugPanel } from "./useDebugPanel";
 
 const STORAGE_KEY = "makerspace-floorplan-tabs-v3";
 const ACTIVE_TAB_STORAGE_KEY = "makerspace-floorplan-active-tab";
@@ -23,7 +25,6 @@ const BAY_LAYOUT: Bay[] = [
 ];
 const STAGING_MARGIN = BAY_LAYOUT[0].width / 2;
 
-type SyncState = "idle" | "saving" | "saved" | "offline" | "error";
 type DragState = {
   pointerId: number;
   toolId: string;
@@ -59,10 +60,6 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
-type DebugEvent = {
-  id: string;
-  message: string;
-};
 const BAY_BOUNDS = BAY_LAYOUT.reduce(
   (bounds, bay) => ({
     minX: Math.min(bounds.minX, bay.x, -744), // Include mezzanine area
@@ -173,18 +170,6 @@ function estimateJsonBytes(value: unknown) {
 function formatKiB(bytes: number) {
   const kib = bytes / 1024;
   return `${kib >= 10 ? kib.toFixed(0) : kib.toFixed(1)} KiB`;
-}
-
-function formatDebugTime() {
-  const date = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(date);
-  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${byType.hour ?? ""}:${byType.minute ?? "00"}:${byType.second ?? "00"} ${byType.dayPeriod ?? ""
-    }`.trim();
 }
 
 function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
@@ -419,15 +404,10 @@ function App() {
   const [tabs, setTabs] = useState<LayoutTab[]>(() => loadCachedTabs() ?? orderTabs(seedTabs.map(normalizeTab)));
   const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId(tabs) ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
-  const [syncState, setSyncState] = useState<SyncState>("idle");
-  const [syncMessage, setSyncMessage] = useState("Local draft ready");
   const [gridDark, setGridDark] = useState(true);
   const [showInfra, setShowInfra] = useState(false);
   const [showMezz, setShowMezz] = useState(true);
-  const [showDebug, setShowDebug] = useState(false);
-  const [debugEvents, setDebugEvents] = useState<DebugEvent[]>(() => [
-    { id: uid("debug"), message: `${formatDebugTime()} boot localStorage:${STORAGE_KEY}` },
-  ]);
+  const debugPanel = useDebugPanel();
   const [showAddTool, setShowAddTool] = useState(false);
   const [addToolForm, setAddToolForm] = useState({
     name: "",
@@ -445,7 +425,6 @@ function App() {
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
-  const debugLogRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
   const panState = useRef<PanState>(null);
@@ -453,36 +432,22 @@ function App() {
   const localWriteTimer = useRef<number | null>(null);
   const pendingSaveTabId = useRef<string | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
-  const debugCodeBuffer = useRef("");
   const [tutorialStep, setTutorialStep] = useState<null | "zoom" | "rotate" | "delete" | "add" | "rename">(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [deleteProximity, setDeleteProximity] = useState(0);
   const deleteProximityRef = useRef(0);
-  const [dbDisabled, setDbDisabled] = useState(false);
-  const [localWriteDisabled, setLocalWriteDisabled] = useState(false);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const flashTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
   const initialized = useRef(false);
-
-  const isStorageAvailable = useMemo(() => {
-    try {
-      localStorage.setItem("__storage_test__", "test");
-      localStorage.removeItem("__storage_test__");
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }, []);
-
-  const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
 
-  const canEdit = activeTabHasLayout && (showDebug || activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const canEdit = activeTabHasLayout && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const pushDebugEvent = debugPanel.pushEvent;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -502,13 +467,6 @@ function App() {
     }, 900);
   }, [activeTabId]);
 
-  const pushDebugEvent = useCallback((message: string) => {
-    setDebugEvents((current) => [
-      ...current.slice(-30),
-      { id: uid("debug"), message: `${formatDebugTime()} ${message}` },
-    ]);
-  }, []);
-
   const paintDeleteZone = useCallback((level: number) => {
     deleteProximityRef.current = level;
     const zone = deleteZoneRef.current;
@@ -521,9 +479,7 @@ function App() {
   const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS) => {
     pendingSaveTabId.current = tabId;
     saveDelayMs.current = delayMs;
-    setSyncState("saving");
-    setSyncMessage(message);
-    pushDebugEvent("queued write");
+    pushDebugEvent(`queued write (${message})`);
   }, [pushDebugEvent]);
 
   const getSvgPoint = useCallback((clientX: number, clientY: number) => {
@@ -547,26 +503,16 @@ function App() {
       if (!draft) return;
 
       try {
-        setSyncState("saving");
         pushDebugEvent("save start");
-
-        if (dbDisabled) {
-          throw new Error("DB connection disabled");
-        }
 
         const { tab } = await saveTab(normalizeTab(draft), localUserId);
         setTabs((current) => current.map((item) => (item.id === tab.id ? normalizeTab(tab) : item)));
-        setSyncState("saved");
-        setSyncMessage("Saved to D1");
         pushDebugEvent("save ok");
       } catch {
-        setSyncState("offline");
-        const msg = dbDisabled ? "DB disabled" : (isLocalhost ? "localhost draft" : "Local draft; sync pending");
-        setSyncMessage(msg);
-        pushDebugEvent(`save failed (${dbDisabled ? "DB disabled" : "local only"})`);
+        pushDebugEvent("save failed (local only)");
       }
     }, delayMs);
-  }, [localUserId, pushDebugEvent, dbDisabled, isLocalhost]);
+  }, [localUserId, pushDebugEvent]);
 
   useEffect(() => {
     if (tutorialStep && tutorialStep !== "rename") {
@@ -637,13 +583,9 @@ function App() {
           if (savedTabId) return savedTabId;
           return normalized.some((tab) => tab.id === current) ? current : normalized[0].id;
         });
-        setSyncState("saved");
-        setSyncMessage("Loaded from D1");
         pushDebugEvent("fetch ok");
       })
       .catch(() => {
-        setSyncState("offline");
-        setSyncMessage("Using local seed data");
         pushDebugEvent("fetch failed (using local)");
       })
       .finally(() => {
@@ -656,72 +598,55 @@ function App() {
     if (!tab || tab.hasLayout !== false) return;
 
     let cancelled = false;
-    setSyncState("saving");
-    setSyncMessage("Loading tab layout");
     fetchTab(tab.id, localUserId)
       .then(({ tab: loaded }) => {
         if (cancelled) return;
         setTabs((current) =>
           orderTabs(current.map((item) => (item.id === loaded.id ? normalizeTab({ ...loaded, hasLayout: true }) : item))),
         );
-        setSyncState("saved");
-        setSyncMessage("Loaded tab layout");
         pushDebugEvent("tab layout loaded");
       })
       .catch(() => {
         if (cancelled) return;
-        setSyncState("offline");
-        setSyncMessage(isLocalhost ? "localhost draft" : "Unable to load tab layout");
         pushDebugEvent("tab layout load failed");
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeTabId, isLocalhost, localUserId, pushDebugEvent, tabs]);
+  }, [activeTabId, localUserId, pushDebugEvent, tabs]);
 
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
 
   useEffect(() => {
-    if (localWriteDisabled || !tabsRef.current.some((tab) => tab.id === activeTabId)) return;
+    if (!tabsRef.current.some((tab) => tab.id === activeTabId)) return;
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
-  }, [activeTabId, localWriteDisabled]);
+  }, [activeTabId]);
 
   useEffect(() => {
-    if (localWriteDisabled) {
-      if (localWriteTimer.current) {
-        window.clearTimeout(localWriteTimer.current);
-        localWriteTimer.current = null;
-      }
-    } else {
-      if (localWriteTimer.current) {
-        window.clearTimeout(localWriteTimer.current);
-      }
-      localWriteTimer.current = window.setTimeout(() => {
-        const hydratedTabs = tabsRef.current.filter((tab) => tab.hasLayout !== false);
-        if (hydratedTabs.length > 0) {
-          localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify(orderTabs(hydratedTabs.map(normalizeTab))),
-          );
-        }
-        localWriteTimer.current = null;
-      }, LOCAL_WRITE_DELAY_MS);
+    if (localWriteTimer.current) {
+      window.clearTimeout(localWriteTimer.current);
     }
+    localWriteTimer.current = window.setTimeout(() => {
+      const hydratedTabs = tabsRef.current.filter((tab) => tab.hasLayout !== false);
+      if (hydratedTabs.length > 0) {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(orderTabs(hydratedTabs.map(normalizeTab))),
+        );
+      }
+      localWriteTimer.current = null;
+    }, LOCAL_WRITE_DELAY_MS);
+
     if (!initialized.current) return;
     if (pendingSaveTabId.current) {
       scheduleSave(pendingSaveTabId.current, saveDelayMs.current);
       pendingSaveTabId.current = null;
       saveDelayMs.current = DEFAULT_SAVE_DELAY_MS;
     }
-  }, [scheduleSave, tabs, localWriteDisabled]);
-
-  useEffect(() => {
-    if (!debugLogRef.current) return;
-    debugLogRef.current.scrollTop = debugLogRef.current.scrollHeight;
-  }, [debugEvents]);
+  }, [scheduleSave, tabs]);
 
   useEffect(() => {
     activeTabButtonRef.current?.scrollIntoView({
@@ -734,7 +659,6 @@ function App() {
   const startToolDrag = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
     event.stopPropagation();
     if (!canEdit) {
-      setSyncMessage("Clone tab to edit");
       triggerClonePrompt();
       return;
     }
@@ -890,7 +814,6 @@ function App() {
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.target instanceof Element && event.target.closest(".tool-node")) return;
     if (!canEdit) {
-      setSyncMessage("Clone tab to edit");
       triggerClonePrompt();
     }
     const rect = svgRef.current?.getBoundingClientRect();
@@ -910,7 +833,6 @@ function App() {
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
     if (!canEdit) {
-      setSyncMessage("Clone tab to edit");
       triggerClonePrompt();
     }
     const local = getSvgPoint(event.clientX, event.clientY);
@@ -933,12 +855,7 @@ function App() {
   };
 
   const catchDebugCode = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key.length !== 1) return;
-    debugCodeBuffer.current = `${debugCodeBuffer.current}${event.key}`.slice(-5);
-    if (debugCodeBuffer.current === "IDDQD") {
-      setShowDebug((current) => !current);
-      debugCodeBuffer.current = "";
-    }
+    debugPanel.toggleFromKey(event.key);
   };
 
   const debugLines = useMemo(() => {
@@ -966,15 +883,11 @@ function App() {
   const handleCloneTab = async (source: LayoutTab) => {
     let sourceTab = source;
     if (sourceTab.hasLayout === false) {
-      setSyncState("saving");
-      setSyncMessage("Loading tab before clone");
       try {
         const { tab } = await fetchTab(sourceTab.id, localUserId);
         sourceTab = normalizeTab({ ...tab, hasLayout: true });
         setTabs((current) => orderTabs(current.map((item) => (item.id === sourceTab.id ? sourceTab : item))));
       } catch {
-        setSyncState("offline");
-        setSyncMessage("Unable to load tab before clone");
         pushDebugEvent("clone source load failed");
         return;
       }
@@ -984,36 +897,26 @@ function App() {
     setTabs((current) => orderTabs([...current, clone]));
     setActiveTabId(clone.id);
     setSelectedToolId(null);
-    setSyncState("saving");
-    setSyncMessage("Cloning tab");
     pushDebugEvent("clone start");
 
     if (!localStorage.getItem("makerspace-tutorial-seen")) {
       setTutorialStep("zoom");
-      if (!localWriteDisabled) {
-        localStorage.setItem("makerspace-tutorial-seen", "true");
-      }
+      localStorage.setItem("makerspace-tutorial-seen", "true");
     }
 
     try {
       const { tab } = await persistClone(clone, localUserId);
         setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? normalizeTab(tab) : item))));
-      setSyncState("saved");
-      setSyncMessage("Clone saved to D1");
       pushDebugEvent("clone ok");
     } catch (err) {
       if (err instanceof LimitError) {
         // Roll back the optimistic add — limit hit server-side
         setTabs((current) => current.filter((t) => t.id !== clone.id));
         setActiveTabId(sourceTab.id);
-        setSyncState("error");
-        setSyncMessage(err.message);
         pushDebugEvent(`clone rejected: ${err.message}`);
         return;
       }
       pendingSaveTabId.current = clone.id;
-      setSyncState("offline");
-      setSyncMessage("Clone local; sync pending");
       pushDebugEvent("clone failed (local only)");
     }
   };
@@ -1062,12 +965,8 @@ function App() {
 
     try {
       await deleteTabFromDb(tab.id, localUserId);
-      setSyncState("saved");
-      setSyncMessage("Deleted tab from D1");
       pushDebugEvent("delete ok");
     } catch {
-      setSyncState("offline");
-      setSyncMessage("Deleted locally; D1 delete pending");
       pushDebugEvent("delete failed (local only)");
     }
   };
@@ -1081,8 +980,6 @@ function App() {
     setTabs(freshTabs);
     setActiveTabId(freshTabs[0].id);
     setSelectedToolId(null);
-    setSyncState("idle");
-    setSyncMessage("Local draft cleared");
     pushDebugEvent("local draft cleared");
   };
 
@@ -1183,6 +1080,16 @@ function App() {
     setAddToolErrors({});
   };
 
+  const spoofTabOwner = () => {
+    const nowTab = tabs.find((tab) => tab.name === "Now");
+    if (!nowTab) return;
+    const spoofId = `spoof-${Math.random().toString(36).slice(2, 8)}`;
+    const clone = { ...cloneLayoutTab(nowTab), authorId: spoofId, name: `spoof:${spoofId.slice(6)}` };
+    setTabs((current) => orderTabs([...current, clone]));
+    setActiveTabId(clone.id);
+    pushDebugEvent(`spoof tab created owner:${spoofId}`);
+  };
+
 
   return (
     <main className="app-shell">
@@ -1192,70 +1099,17 @@ function App() {
         tabIndex={0}
         onKeyDown={catchDebugCode}
       >
-        {showDebug && (
-          <div className={`debug-popover ${syncState}`} aria-live="polite">
-            <button type="button" className="debug-close" onClick={() => setShowDebug(false)} title="Close Debug Panel">×</button>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <button
-                  type="button"
-                  className={`debug-icon-btn ${!isStorageAvailable || localWriteDisabled ? "disabled" : ""} ${syncState === "saving" ? "flicker" : ""}`}
-                  onClick={() => setLocalWriteDisabled(!localWriteDisabled)}
-                  title={localWriteDisabled ? "Enable Local Write" : "Disable Local Write"}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                    <polyline points="7 3 7 8 15 8"></polyline>
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className={`debug-icon-btn ${dbDisabled || syncState === "offline" || syncState === "error" ? "disabled" : ""}`}
-                  onClick={() => setDbDisabled(!dbDisabled)}
-                  title={dbDisabled ? "Enable Database Sync" : "Disable Database Sync"}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
-              <button type="button" className="debug-clear" onClick={clearLocalDraft}>
-                clear<br />local
-              </button>
-              <button
-                type="button"
-                className="debug-clear"
-                title="Clone the Now tab with a randomized owner to test unauthorized view"
-                onClick={() => {
-                  const nowTab = tabs.find((t) => t.name === "Now");
-                  if (!nowTab) return;
-                  const spoofId = `spoof-${Math.random().toString(36).slice(2, 8)}`;
-                  const clone = { ...cloneLayoutTab(nowTab), authorId: spoofId, name: `spoof:${spoofId.slice(6)}` };
-                  setTabs((current) => orderTabs([...current, clone]));
-                  setActiveTabId(clone.id);
-                  pushDebugEvent(`spoof tab created owner:${spoofId}`);
-                }}
-              >
-                spoof<br />tab
-              </button>
-              <button type="button" className="debug-clear" style={{ opacity: 0.5 }}>
-                future<br />feature
-              </button>
-            </div>
-            {debugLines.map((line) => (
-              <span key={line}>{line}</span>
-            ))}
-            <div ref={debugLogRef} className="debug-log" aria-label="Database write log">
-              {debugEvents.map((event) => (
-                <span key={event.id}>{event.message}</span>
-              ))}
-            </div>
-          </div>
+        {debugPanel.isVisible && (
+          <DebugPanel
+            debugLines={debugLines}
+            editOverride={debugPanel.editOverride}
+            events={debugPanel.events}
+            logRef={debugPanel.logRef}
+            onClearLocalDraft={clearLocalDraft}
+            onClose={() => debugPanel.setIsVisible(false)}
+            onSpoofTab={spoofTabOwner}
+            onToggleEditOverride={() => debugPanel.setEditOverride((current) => !current)}
+          />
         )}
 
         <div className="bottom-controls-wrap">
@@ -1570,7 +1424,7 @@ function App() {
         {tabs.map((tab) => {
           const isNow = tab.name === "Now";
           const isActive = tab.id === activeTabId;
-          const isUserTab = showDebug || tab.canEdit === true || tab.authorId === localUserId;
+          const isUserTab = debugPanel.editOverride || tab.canEdit === true || tab.authorId === localUserId;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
