@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { TAB_LIMITS, VALIDATION_LIMITS } from "../functions/api/_shared";
+import { readFailedSyncMessage } from "./apiErrors";
 import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
@@ -498,7 +499,7 @@ async function saveTab(tab: LayoutTab, authorId: string) {
   });
 
   if (!response.ok) {
-    throw new RequestError(`Failed to save tab: ${response.status}`, response.status);
+    throw new RequestError(await readFailedSyncMessage(response), response.status);
   }
 
   return (await response.json()) as SaveResponse;
@@ -525,14 +526,13 @@ async function persistClone(tab: LayoutTab, authorId: string) {
   });
 
   if (response.status === 429) {
-    const body = await response.json().catch(() => ({})) as { error?: string };
-    const error = new LimitError(body.error ?? "tab limit reached");
+    const error = new LimitError(await readFailedSyncMessage(response));
     error.cause = response.status;
     throw error;
   }
 
   if (!response.ok) {
-    throw new RequestError(`Failed to clone tab: ${response.status}`, response.status);
+    throw new RequestError(await readFailedSyncMessage(response), response.status);
   }
 
   return (await response.json()) as SaveResponse;
@@ -545,7 +545,7 @@ async function deleteTabFromDb(tabId: string, authorId: string) {
   });
 
   if (!response.ok) {
-    throw new RequestError(`Failed to delete tab: ${response.status}`, response.status);
+    throw new RequestError(await readFailedSyncMessage(response), response.status);
   }
 }
 
@@ -612,9 +612,27 @@ const SCOPE_COLORS = {
   blue: "#0000ff",
 } as const;
 
-function DisketteStatusIcon({ status, label, offline }: { status: ReturnType<typeof getDisketteStatus>; label: string; offline: boolean }) {
+function DisketteStatusIcon({
+  status,
+  label,
+  offline,
+  syncError,
+}: {
+  status: ReturnType<typeof getDisketteStatus>;
+  label: string;
+  offline: boolean;
+  syncError?: string;
+}) {
+  const statusLabel = syncError ? `${label}: ${syncError}` : label;
+
   return (
-    <div className={`diskette-status ${status} ${offline ? "offline" : ""}`} aria-label={label} role="status">
+    <div
+      className={`diskette-status ${status} ${offline ? "offline" : ""}`}
+      aria-label={statusLabel}
+      data-tooltip={syncError || undefined}
+      role="status"
+      tabIndex={syncError ? 0 : undefined}
+    >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path className="disk-body" d="M4 3h13l3 3v15H4V3Z" />
         <path className="disk-label" d="M7 3v7h10V3" />
@@ -696,6 +714,7 @@ function App() {
   const pushDebugEvent = debugPanel.pushEvent;
   const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
   const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
+  const disketteSyncError = tabs.find((tab) => tab.syncError)?.syncError;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -1543,7 +1562,7 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls-stack">
-            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} />
+            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} syncError={disketteSyncError} />
             <div className="floorplan-controls" aria-label="Floorplan controls">
             {canEdit && (
               <button

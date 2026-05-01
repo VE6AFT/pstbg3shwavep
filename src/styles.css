@@ -221,7 +221,8 @@ button {
   cursor: pointer;
 }
 
-.floorplan-controls [data-tooltip]::after {
+.floorplan-controls [data-tooltip]::after,
+.diskette-status[data-tooltip]::before {
   content: attr(data-tooltip);
   position: absolute;
   left: calc(100% + 11px);
@@ -237,7 +238,9 @@ button {
   line-height: 1;
   letter-spacing: 0;
   text-transform: none;
-  white-space: nowrap;
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  max-width: min(360px, calc(100vw - 72px));
   pointer-events: none;
   opacity: 0;
   transform: translateY(-50%) translateX(-2px);
@@ -245,7 +248,9 @@ button {
 
 .floorplan-controls [data-tooltip]:hover::after,
 .floorplan-controls [data-tooltip]:focus-visible::after,
-.floorplan-controls label[data-tooltip]:has(input:focus-visible)::after {
+.floorplan-controls label[data-tooltip]:has(input:focus-visible)::after,
+.diskette-status[data-tooltip]:hover::before,
+.diskette-status[data-tooltip]:focus-visible::before {
   opacity: 1;
   transform: translateY(-50%);
 }
