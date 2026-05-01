@@ -3,7 +3,7 @@ import type { LayoutTab } from "./types";
 export type DisketteStatus = "saving" | "dirty" | "synced";
 
 const FLUSHABLE_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "delete-pending"]);
-const UNSYNCED_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "saving", "error", "delete-pending"]);
+const UNSYNCED_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "draft-clone", "saving", "error", "delete-pending"]);
 
 export function stripSyncMetadata(tab: LayoutTab): LayoutTab {
   const { syncState: _syncState, dirtyAt: _dirtyAt, syncError: _syncError, ...serverTab } = tab;
@@ -96,6 +96,7 @@ export function disketteStatusLabel(status: DisketteStatus, dbReachable: boolean
 function shouldPreserveLocalOnlyVersion(tab: LayoutTab) {
   return tab.syncState === "dirty"
     || tab.syncState === "local-only"
+    || tab.syncState === "draft-clone"
     || tab.syncState === "saving"
     || tab.syncState === "error"
     || tab.syncState === "delete-pending";

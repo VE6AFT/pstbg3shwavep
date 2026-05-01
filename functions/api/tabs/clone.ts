@@ -1,6 +1,5 @@
 import {
   json,
-  ensureStaticNowRow,
   publicLayoutTab,
   readAuthorIdHeader,
   readTabCreationLimit,
@@ -44,20 +43,18 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       ...body.tab,
       authorId,
       canEdit: true,
+      clonedFromId: null,
+      clonedFromName: null,
       createdAt: updatedAt,
       updatedAt,
     };
 
-    if (tab.clonedFromId === STATIC_NOW_TAB_ID) {
-      await ensureStaticNowRow(env.DB);
-    }
-
     await env.DB.prepare(
       `INSERT INTO tabs
-        (id, name, author_id, cloned_from_tab_id, layout_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (id, name, author_id, layout_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)`,
     )
-      .bind(tab.id, tab.name, tab.authorId ?? null, tab.clonedFromId ?? null, JSON.stringify(tab.layout), updatedAt, updatedAt)
+      .bind(tab.id, tab.name, tab.authorId ?? null, JSON.stringify(tab.layout), updatedAt, updatedAt)
       .run();
 
     return json({ tab: publicLayoutTab(tab) });

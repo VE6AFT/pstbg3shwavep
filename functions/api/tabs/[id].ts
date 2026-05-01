@@ -25,13 +25,12 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, par
         WHEN tabs.author_id IS NOT NULL AND tabs.author_id = ? THEN 1
         ELSE 0
       END AS can_edit,
-      tabs.cloned_from_tab_id,
-      cloned_from.name AS cloned_from_tab_name,
+      NULL AS cloned_from_tab_id,
+      NULL AS cloned_from_tab_name,
       tabs.layout_json,
       tabs.created_at,
       tabs.updated_at
     FROM tabs
-    LEFT JOIN tabs AS cloned_from ON cloned_from.id = tabs.cloned_from_tab_id
     WHERE tabs.id = ?`,
   )
     .bind(authorId, params.id)
@@ -60,7 +59,14 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
       return json({ error: "The Now tab is static and cannot be saved" }, { status: 400 });
     }
 
-    const existing = await env.DB.prepare("SELECT author_id, created_at FROM tabs WHERE id = ?").bind(body.id).first<{ author_id: string | null; created_at: string }>();
+    const layoutJson = JSON.stringify(body.layout);
+    const existing = await env.DB.prepare("SELECT author_id, name, layout_json, created_at, updated_at FROM tabs WHERE id = ?").bind(body.id).first<{
+      author_id: string | null;
+      name: string;
+      layout_json: string;
+      created_at: string;
+      updated_at: string;
+    }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to edit this tab" }, { status: 403 });
     }
@@ -77,9 +83,21 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
       ...body,
       authorId: existing ? existing.author_id : authorId,
       canEdit: !existing || existing.author_id === authorId,
+      clonedFromId: null,
+      clonedFromName: null,
       createdAt: existing?.created_at ?? updatedAt,
       updatedAt,
     };
+
+    if (existing && existing.name === body.name && existing.layout_json === layoutJson) {
+      return json({
+        tab: publicLayoutTab({
+          ...tab,
+          createdAt: existing.created_at,
+          updatedAt: existing.updated_at,
+        }),
+      });
+    }
 
     await env.DB.prepare(
       `INSERT INTO tabs (id, name, author_id, layout_json, created_at, updated_at)
@@ -89,7 +107,7 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
         layout_json = excluded.layout_json,
         updated_at = excluded.updated_at`,
     )
-      .bind(tab.id, tab.name, tab.authorId ?? null, JSON.stringify(tab.layout), tab.createdAt ?? updatedAt, updatedAt)
+      .bind(tab.id, tab.name, tab.authorId ?? null, layoutJson, tab.createdAt ?? updatedAt, updatedAt)
       .run();
 
     return json({ tab: publicLayoutTab(tab) });
@@ -119,17 +137,10 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, 
       return json({ error: "Unauthorized to delete this tab" }, { status: 403 });
     }
 
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE tabs
-         SET cloned_from_tab_id = NULL
-         WHERE cloned_from_tab_id = ?`,
-      ).bind(params.id),
-      env.DB.prepare(
-        `DELETE FROM tabs
-         WHERE id = ?`,
-      ).bind(params.id),
-    ]);
+    await env.DB.prepare(
+      `DELETE FROM tabs
+       WHERE id = ?`,
+    ).bind(params.id).run();
 
     return json({ ok: true });
   } catch (error) {

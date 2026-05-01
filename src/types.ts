@@ -53,4 +53,4 @@ export type SaveResponse = {
   tab: LayoutTab;
 };
 
-export type SyncState = "synced" | "dirty" | "saving" | "local-only" | "error" | "delete-pending";
+export type SyncState = "synced" | "dirty" | "saving" | "local-only" | "draft-clone" | "error" | "delete-pending";

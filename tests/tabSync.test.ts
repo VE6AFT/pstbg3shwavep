@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getDisketteStatus, mergeRemoteTabSummaries } from "../src/tabSync";
+import { getDisketteStatus, isFlushableTab, mergeRemoteTabSummaries } from "../src/tabSync";
 import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
@@ -68,6 +68,19 @@ describe("remote/local tab sync merge", () => {
     expect(mergeRemoteTabSummaries([remote], [localOnly])).toEqual(expect.arrayContaining([localOnly]));
   });
 
+  it("preserves draft clones without making them flushable", () => {
+    const remote = makeSummary({ id: "tab-default", name: "Now" });
+    const draftClone = makeTab({
+      id: "tab-draft",
+      name: "Renamed Local Draft",
+      syncState: "draft-clone",
+      dirtyAt: "2026-04-30T03:00:00.000Z",
+    });
+
+    expect(mergeRemoteTabSummaries([remote], [draftClone])).toEqual(expect.arrayContaining([draftClone]));
+    expect(isFlushableTab(draftClone)).toBe(false);
+  });
+
   it("keeps newer local dirty work over an older remote summary", () => {
     const local = makeTab({
       name: "Local New",
@@ -115,6 +128,7 @@ describe("diskette status", () => {
     expect(getDisketteStatus([makeTab()], false, false)).toBe("synced");
     expect(getDisketteStatus([makeTab({ syncState: "dirty" })], true, true)).toBe("saving");
     expect(getDisketteStatus([makeTab({ syncState: "dirty" })], true, false)).toBe("dirty");
+    expect(getDisketteStatus([makeTab({ syncState: "draft-clone" })], true, false)).toBe("dirty");
     expect(getDisketteStatus([makeTab()], true, false)).toBe("synced");
   });
 });

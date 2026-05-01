@@ -31,7 +31,7 @@ import { useDebugPanel } from "./useDebugPanel";
 const OLD_TABS_STORAGE_KEY = "pstbg3shwavep-tabs";
 const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
-const LOCAL_WRITE_DELAY_MS = 2500;
+const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const TUTORIAL_STEP_MS = 5000;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
@@ -740,15 +740,23 @@ function App() {
     zone.classList.toggle("shaking", level === 1);
   }, [tutorialStep]);
 
-  const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS) => {
+  const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS, options: { flushDraftClone?: boolean } = {}) => {
     const dirtyAt = new Date().toISOString();
     saveDelayMs.current = delayMs;
     setTabs((current) =>
       current.map((tab) => {
         if (tab.id !== tabId) return tab;
+        const shouldFlushDraftClone = options.flushDraftClone ?? true;
+        const syncState: LayoutTab["syncState"] = tab.syncState === "local-only"
+          ? "local-only"
+          : tab.syncState === "draft-clone" && shouldFlushDraftClone
+            ? "local-only"
+            : tab.syncState === "draft-clone"
+              ? "draft-clone"
+              : "dirty";
         return {
           ...tab,
-          syncState: tab.syncState === "local-only" ? "local-only" : "dirty",
+          syncState,
           dirtyAt,
           syncError: undefined,
           updatedAt: dirtyAt,
@@ -1323,50 +1331,20 @@ function App() {
       ...cloneLayoutTab(sourceTab),
       authorId: localUserId,
       hasLayout: true,
-      syncState: "local-only" as const,
+      syncState: "draft-clone" as const,
       dirtyAt,
       syncError: undefined,
       updatedAt: dirtyAt,
     };
-    const previousActiveTabId = activeTabId;
     localAuthorTabCountRef.current += 1;
     setTabs((current) => orderTabs([...current, clone]));
     setActiveTabId(clone.id);
     setSelectedToolId(null);
-    pushDebugEvent("clone start");
+    pushDebugEvent("clone draft created");
 
     if (!localStorage.getItem("pstbg3shwavep-tutorial-seen")) {
       setTutorialStep("zoom");
       localStorage.setItem("pstbg3shwavep-tutorial-seen", "true");
-    }
-
-    try {
-      syncInFlightRef.current = true;
-      setSyncInFlight(true);
-      const { tab } = await persistClone(clone, localUserId);
-      setDbReachable(true);
-      setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? withSyncedState(normalizeTab(tab)) : item))));
-      pushDebugEvent("clone ok");
-    } catch (err) {
-      if (err instanceof LimitError) {
-        localAuthorTabCountRef.current = Math.max(0, localAuthorTabCountRef.current - 1);
-        setTabs((current) => current.filter((item) => item.id !== clone.id));
-        setActiveTabId((current) => (current === clone.id ? previousActiveTabId : current));
-        return;
-      }
-
-      if (isTerminalSyncError(err)) {
-        setDbReachable(true);
-        const message = syncErrorMessage(err);
-        setTabs((current) => current.map((item) => (item.id === clone.id ? { ...item, syncState: "error", syncError: message } : item)));
-        pushDebugEvent(`clone rejected: ${message}`);
-        return;
-      }
-      setDbReachable(false);
-      pushDebugEvent("clone failed (local only)");
-    } finally {
-      syncInFlightRef.current = false;
-      setSyncInFlight(false);
     }
   };
 
@@ -1377,6 +1355,11 @@ function App() {
       return;
     }
     const previousName = tabs.find((tab) => tab.id === tabId)?.name;
+    if (trimmed === previousName) {
+      setRenamingTabId(null);
+      setRenameDraft("");
+      return;
+    }
 
     setTabs((current) =>
       current.map((tab) => {
@@ -1400,7 +1383,7 @@ function App() {
     );
     setRenamingTabId(null);
     setRenameDraft("");
-    markTabDirty(tabId, "Renamed tab");
+    markTabDirty(tabId, "Renamed tab", DEFAULT_SAVE_DELAY_MS, { flushDraftClone: false });
   };
 
   const deleteClonedTab = async (tab: LayoutTab) => {
@@ -1410,7 +1393,7 @@ function App() {
     setActiveTabId((current) => (current === tab.id ? fallbackTab.id : current));
     setSelectedToolId(null);
 
-    if (tab.syncState === "local-only") {
+    if (tab.syncState === "local-only" || tab.syncState === "draft-clone") {
       setTabs((current) => current.filter((item) => item.id !== tab.id));
       pushDebugEvent("local tab deleted");
       return;
@@ -1870,7 +1853,7 @@ function App() {
         {showHoveredTabDetails && (
           <div className="tab-detail-popover" aria-live="polite">
             <span>cloned: {formatDisplayDate(hoveredTab.createdAt ?? hoveredTab.updatedAt)}</span>
-            <span>from: {hoveredTab.clonedFromName ?? "none"}</span>
+            {hoveredTab.clonedFromName && <span>from: {hoveredTab.clonedFromName}</span>}
           </div>
         )}
       </section>

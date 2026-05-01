@@ -219,8 +219,8 @@ export async function readTabCreationLimit(db: D1Database, authorId: string): Pr
 export async function ensureStaticNowRow(db: D1Database) {
   await db.prepare(
     `INSERT OR IGNORE INTO tabs
-      (id, name, author_id, cloned_from_tab_id, layout_json)
-      VALUES (?, ?, NULL, NULL, ?)`,
+      (id, name, author_id, layout_json)
+      VALUES (?, ?, NULL, ?)`,
   )
     .bind(STATIC_NOW_TAB_ID, STATIC_NOW_TAB_NAME, JSON.stringify(STATIC_NOW_LAYOUT))
     .run();
