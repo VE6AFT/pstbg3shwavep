@@ -22,9 +22,17 @@ function formatDebugTime() {
   }`.trim();
 }
 
+const DEV_DEBUG_ORIGIN = "https://dev.pstbg3shwavep.pages.dev";
+const LOCAL_DEBUG_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+export function isDevDebugOrigin() {
+  if (typeof window === "undefined") return false;
+  return LOCAL_DEBUG_HOSTS.has(window.location.hostname) || window.location.origin === DEV_DEBUG_ORIGIN;
+}
+
 export function useDebugPanel() {
-  const [isVisible, setIsVisible] = useState(false);
-  const [editOverride, setEditOverride] = useState(false);
+  const [showDevLauncher] = useState(() => isDevDebugOrigin());
+  const [isVisible, setIsVisible] = useState(() => isDevDebugOrigin());
   const [events, setEvents] = useState<DebugEvent[]>(() => [
     { id: uid("debug"), message: `${formatDebugTime()} boot localStorage:pstbg3shwavep-tabs` },
   ]);
@@ -53,13 +61,12 @@ export function useDebugPanel() {
   }, [events]);
 
   return {
-    editOverride,
     events,
     isVisible,
     logRef,
     pushEvent,
-    setEditOverride,
     setIsVisible,
+    showDevLauncher,
     toggleFromKey,
   };
 }
