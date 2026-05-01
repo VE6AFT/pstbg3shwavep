@@ -181,21 +181,13 @@ button {
   top: 10px;
   right: 10px;
   z-index: 1000;
-  width: 42px;
-  height: 42px;
-  padding: 5px;
-  border: 1px solid rgba(71, 85, 105, 0.28);
-  border-radius: 6px;
-  background: rgba(248, 250, 252, 0.96);
-  color: #1f2937;
-  box-shadow: 0 10px 25px -8px rgba(0, 0, 0, 0.25);
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2f3338;
   cursor: pointer;
-  backdrop-filter: blur(8px);
-}
-
-.debug-launcher:hover {
-  border-color: rgba(34, 113, 129, 0.42);
-  color: var(--accent);
 }
 
 .debug-launcher svg {
@@ -205,14 +197,14 @@ button {
 }
 
 .debug-launcher-helmet {
-  fill: #6b7280;
+  fill: #8d939b;
   stroke: currentColor;
   stroke-linejoin: round;
   stroke-width: 2;
 }
 
 .debug-launcher-face {
-  fill: #d6a06f;
+  fill: #c5c7ca;
   stroke: currentColor;
   stroke-linejoin: round;
   stroke-width: 2;
