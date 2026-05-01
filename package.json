@@ -12,9 +12,11 @@
     "db:migrate:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./schema.sql",
     "db:seed:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./seed.sql",
     "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --env production --file=./schema.sql",
+    "db:seed": "npx wrangler d1 execute pstbg3shwavep --remote --env production --file=./seed.sql",
     "db:migrate:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --file=./schema.sql",
     "db:seed:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --file=./seed.sql",
-    "db:reset:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --command \"DROP TABLE IF EXISTS tabs;\" && npm run db:migrate:dev && npm run db:seed:dev"
+    "db:reset:dev": "node scripts/confirm-reset.js dev && npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --command \"DROP TABLE IF EXISTS tabs;\" && npm run db:migrate:dev && npm run db:seed:dev",
+    "db:reset:prod": "node scripts/confirm-reset.js prod && npx wrangler d1 execute pstbg3shwavep --remote --env production --command \"DROP TABLE IF EXISTS tabs;\" && npm run db:migrate && npm run db:seed"
   },
   "dependencies": {
     "react": "^19.0.0",

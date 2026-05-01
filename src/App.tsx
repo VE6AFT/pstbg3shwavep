@@ -19,7 +19,6 @@ import {
   getDisketteStatus,
   hasFlushableTabs,
   isFlushableTab,
-  isHiddenPendingDelete,
   mergeRemoteTabSummaries,
   stripSyncMetadata,
   visibleTabs,
@@ -334,19 +333,6 @@ function orderTabs(tabs: LayoutTab[]) {
     if (byTime !== 0) return byTime;
     return a.name.localeCompare(b.name);
   });
-}
-
-function formatDisplayDate(value?: string) {
-  if (!value) return "not recorded";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "not recorded";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function estimateJsonBytes(value: unknown) {
@@ -676,7 +662,6 @@ function App() {
   const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [hoveredTabId, setHoveredTabId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
@@ -703,8 +688,6 @@ function App() {
   const activeTab = displayedTabs.find((tab) => tab.id === activeTabId) ?? displayedTabs[0] ?? tabs[0];
   const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
-  const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
-  const showHoveredTabDetails = hoveredTab !== null && !isHiddenPendingDelete(hoveredTab) && !isStaticNowTab(hoveredTab);
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
   const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
 
@@ -1850,12 +1833,6 @@ function App() {
             </svg>
           </div>
         )}
-        {showHoveredTabDetails && (
-          <div className="tab-detail-popover" aria-live="polite">
-            <span>cloned: {formatDisplayDate(hoveredTab.createdAt ?? hoveredTab.updatedAt)}</span>
-            {hoveredTab.clonedFromName && <span>from: {hoveredTab.clonedFromName}</span>}
-          </div>
-        )}
       </section>
 
       <nav className="sheet-tabs" aria-label="Layout tabs">
@@ -1870,14 +1847,6 @@ function App() {
             <div
               key={tab.id}
               className="sheet-tab-wrap"
-              onMouseEnter={() => setHoveredTabId(tab.id)}
-              onMouseLeave={() => setHoveredTabId(null)}
-              onFocus={() => setHoveredTabId(tab.id)}
-              onBlur={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget)) {
-                  setHoveredTabId(null);
-                }
-              }}
             >
               {!isNow && isUserTab && (
                 <button
