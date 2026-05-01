@@ -8,9 +8,10 @@ import {
   useState,
 } from "react";
 import { VALIDATION_LIMITS } from "../functions/api/_shared";
-import buildingGeometrySvg from "./assets/building-geometry.svg?raw";
+import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
+import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import {
   disketteStatusLabel,
@@ -34,6 +35,32 @@ const DEFAULT_SAVE_DELAY_MS = 5000;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
+const STATIC_TOOL_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
+  "undefined",
+  "automotive",
+  "blue",
+  "electronics",
+  "glass/clay",
+  "green",
+  "lasers",
+  "media/vinyl/art",
+  "metal",
+  "plastics",
+  "red",
+  "social",
+  "software/it",
+  "textiles/leather",
+  "training",
+  "wood",
+]);
+const STATIC_TOOL_HAZARDS = new Set<NonNullable<ToolShape["hazards"]>[number]>([
+  "dust",
+  "noise",
+  "dirt",
+  "wet",
+  "fire",
+  "eyes",
+]);
 
 function loadControls() {
   try {
@@ -84,11 +111,11 @@ type ClonePrompt = {
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
-  if (!match) throw new Error("building-geometry.svg must define a viewBox");
+  if (!match) throw new Error("now.svg must define a viewBox");
 
   const values = match[1].trim().split(/[\s,]+/).map(Number);
   if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
-    throw new Error("building-geometry.svg viewBox must contain four finite numbers");
+    throw new Error("now.svg viewBox must contain four finite numbers");
   }
 
   const [minX, minY, width, height] = values;
@@ -97,17 +124,141 @@ function parseSvgViewBox(markup: string): ViewBox {
 
 function extractSvgBody(markup: string) {
   const match = markup.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/i);
-  if (!match) throw new Error("building-geometry.svg must contain an <svg> root");
+  if (!match) throw new Error("now.svg must contain an <svg> root");
   return match[1].trim();
 }
 
-const BUILDING_GEOMETRY_VIEWBOX = parseSvgViewBox(buildingGeometrySvg);
-const BUILDING_GEOMETRY_MARKUP = extractSvgBody(buildingGeometrySvg);
+function parseSvgDocument(markup: string) {
+  if (typeof DOMParser === "undefined") return null;
+  const document = new DOMParser().parseFromString(markup, "image/svg+xml");
+  if (document.querySelector("parsererror")) return null;
+  return document;
+}
+
+function isToolLayer(element: Element) {
+  return element.id === "layer-tools"
+    || element.getAttribute("inkscape:label") === "tools"
+    || element.getAttribute("data-layer") === "tools";
+}
+
+function isStaticToolObjectTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+
+  let current: Element | null = target;
+  while (current) {
+    const parentElement: Element | null = current.parentElement;
+    if (parentElement && isToolLayer(parentElement) && current.tagName.toLowerCase() === "g") {
+      return true;
+    }
+    current = parentElement;
+  }
+
+  return false;
+}
+
+function staticToolLayers(document: Document) {
+  return Array.from(document.querySelectorAll("g")).filter(isToolLayer);
+}
+
+function readStaticToolScope(value: string | null) {
+  if (!value || !STATIC_TOOL_SCOPES.has(value as NonNullable<ToolShape["scope"]>)) return undefined;
+  return value as NonNullable<ToolShape["scope"]>;
+}
+
+function readStaticToolHazards(value: string | null) {
+  if (!value) return undefined;
+  const hazards = value
+    .split(",")
+    .map((hazard) => hazard.trim())
+    .filter((hazard): hazard is NonNullable<ToolShape["hazards"]>[number] =>
+      STATIC_TOOL_HAZARDS.has(hazard as NonNullable<ToolShape["hazards"]>[number]),
+    );
+  return hazards.length > 0 ? Array.from(new Set(hazards)) : undefined;
+}
+
+function readNumberAttribute(element: Element | null, name: string, fallback = 0) {
+  const value = element?.getAttribute(name);
+  const number = value === null || value === undefined ? Number.NaN : Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function readTranslate(transform: string | null) {
+  const match = transform?.match(/translate\(\s*(-?\d+(?:\.\d+)?)(?:[\s,]+(-?\d+(?:\.\d+)?))?\s*\)/i);
+  if (!match) return { x: 0, y: 0 };
+  return {
+    x: Number(match[1]),
+    y: Number(match[2] ?? 0),
+  };
+}
+
+function readRotation(transform: string | null) {
+  const match = transform?.match(/rotate\(\s*(-?\d+(?:\.\d+)?)/i);
+  if (!match) return 0;
+  return Number(match[1]);
+}
+
+function extractStaticNowTools(markup: string): ToolShape[] {
+  const document = parseSvgDocument(markup);
+  if (!document) return [];
+
+  return staticToolLayers(document).flatMap((layer) =>
+    Array.from(layer.children)
+      .filter((child): child is SVGGElement => child.tagName.toLowerCase() === "g" && Boolean(child.id))
+      .map((group) => {
+        const rect = group.querySelector("rect");
+        const translate = readTranslate(group.getAttribute("transform"));
+        const x = translate.x + readNumberAttribute(rect, "x");
+        const y = translate.y + readNumberAttribute(rect, "y");
+        const color = group.getAttribute("data-tool-color")
+          ?? rect?.getAttribute("stroke")
+          ?? rect?.getAttribute("fill")
+          ?? "#697074";
+        const scope = readStaticToolScope(group.getAttribute("data-tool-scope"));
+        const hazards = readStaticToolHazards(group.getAttribute("data-tool-hazards"));
+
+        return {
+          id: group.id,
+          assetId: group.getAttribute("data-tool-asset-id") ?? group.id,
+          name: group.getAttribute("inkscape:label")
+            ?? group.getAttribute("aria-label")
+            ?? group.querySelector("text")?.textContent?.trim()
+            ?? group.id,
+          x,
+          y,
+          width: readNumberAttribute(rect, "width", VALIDATION_LIMITS.minSize),
+          height: readNumberAttribute(rect, "height", VALIDATION_LIMITS.minSize),
+          rotation: readRotation(group.getAttribute("transform")),
+          color,
+          ...(scope ? { scope } : {}),
+          ...(hazards ? { hazards } : {}),
+        };
+      }),
+  );
+}
+
+function stripStaticToolLayers(markup: string) {
+  const document = parseSvgDocument(markup);
+  if (!document || typeof XMLSerializer === "undefined") return extractSvgBody(markup);
+
+  staticToolLayers(document).forEach((layer) => layer.remove());
+  return Array.from(document.documentElement.childNodes)
+    .map((node) => new XMLSerializer().serializeToString(node))
+    .join("\n")
+    .trim();
+}
+
+const NOW_VIEWBOX = parseSvgViewBox(nowSvg);
+const NOW_MARKUP = extractSvgBody(nowSvg);
+const NOW_GEOMETRY_MARKUP = stripStaticToolLayers(nowSvg);
+const STATIC_NOW_TAB = makeStaticNowTab({
+  unit: "in",
+  tools: extractStaticNowTools(nowSvg),
+});
 const CONTENT_BOUNDS = {
-  minX: BUILDING_GEOMETRY_VIEWBOX.minX,
-  minY: BUILDING_GEOMETRY_VIEWBOX.minY,
-  maxX: BUILDING_GEOMETRY_VIEWBOX.minX + BUILDING_GEOMETRY_VIEWBOX.width,
-  maxY: BUILDING_GEOMETRY_VIEWBOX.minY + BUILDING_GEOMETRY_VIEWBOX.height,
+  minX: NOW_VIEWBOX.minX,
+  minY: NOW_VIEWBOX.minY,
+  maxX: NOW_VIEWBOX.minX + NOW_VIEWBOX.width,
+  maxY: NOW_VIEWBOX.minY + NOW_VIEWBOX.height,
 };
 const STAGE_BOUNDS = {
   minX: CONTENT_BOUNDS.minX - STAGE_PAD,
@@ -165,14 +316,10 @@ function tabSortTime(tab: LayoutTab) {
   return Number.isNaN(time) ? Number.MAX_SAFE_INTEGER : time;
 }
 
-function isNowTab(tab: LayoutTab) {
-  return tab.id === "tab-default" || tab.name === "Now";
-}
-
 function orderTabs(tabs: LayoutTab[]) {
   return [...tabs].sort((a, b) => {
-    const aNow = isNowTab(a);
-    const bNow = isNowTab(b);
+    const aNow = isStaticNowTab(a);
+    const bNow = isStaticNowTab(b);
     if (aNow !== bNow) return aNow ? -1 : 1;
     if (aNow && bNow) return 0;
 
@@ -205,12 +352,13 @@ function formatKiB(bytes: number) {
 }
 
 function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
-  const isFirstSeed = tab.id === "tab-default" || tab.name === "Now";
+  if (isStaticNowTab(tab)) return STATIC_NOW_TAB;
+
   const fallbackName = `Sheet ${index + 1}`;
 
   return {
     ...tab,
-    name: isFirstSeed ? "Now" : normalizeTabName(tab.name, fallbackName),
+    name: normalizeTabName(tab.name, fallbackName),
     clonedFromId: tab.clonedFromId ?? null,
     clonedFromName: tab.clonedFromName ? normalizeTabName(tab.clonedFromName, "") : null,
     canEdit: tab.canEdit ?? false,
@@ -465,7 +613,7 @@ function DisketteStatusIcon({ status, label }: { status: ReturnType<typeof getDi
 
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
-  const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(seedTabs.map(normalizeTab)));
+  const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(withStaticNowTab(seedTabs.map(normalizeTab), STATIC_NOW_TAB)));
   const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
@@ -510,11 +658,13 @@ function App() {
 
   const displayedTabs = visibleTabs(tabs);
   const activeTab = displayedTabs.find((tab) => tab.id === activeTabId) ?? displayedTabs[0] ?? tabs[0];
+  const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
+  const showHoveredTabDetails = hoveredTab !== null && !isHiddenPendingDelete(hoveredTab) && !isStaticNowTab(hoveredTab);
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
 
-  const canEdit = activeTabHasLayout && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
   const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
   const disketteLabel = disketteStatusLabel(disketteStatus);
@@ -724,7 +874,7 @@ function App() {
     const loadTabs = async () => {
       try {
         const savedTabId = loadActiveTabId();
-        const cachedTabs = orderTabs((await readCachedTabs(savedTabId)).map(normalizeTab));
+        const cachedTabs = orderTabs(withStaticNowTab((await readCachedTabs(savedTabId)).map(normalizeTab), STATIC_NOW_TAB));
         if (!cancelled && cachedTabs.length > 0) {
           tabsRef.current = cachedTabs;
           setTabs(cachedTabs);
@@ -746,7 +896,9 @@ function App() {
         const { tabs: remoteTabs } = await fetchTabs(localUserId);
         if (cancelled) return;
         setDbReachable(true);
-        const normalized = orderTabs(mergeRemoteTabSummaries(remoteTabs.map(normalizeTab), tabsRef.current));
+        const remoteNonStaticTabs = remoteTabs.map(normalizeTab).filter((tab) => !isStaticNowTab(tab));
+        const currentNonStaticTabs = tabsRef.current.filter((tab) => !isStaticNowTab(tab));
+        const normalized = orderTabs(withStaticNowTab(mergeRemoteTabSummaries(remoteNonStaticTabs, currentNonStaticTabs), STATIC_NOW_TAB));
         tabsRef.current = normalized;
         setTabs(normalized);
         setActiveTabId((current) => {
@@ -837,7 +989,7 @@ function App() {
       window.clearTimeout(localWriteTimer.current);
     }
     localWriteTimer.current = window.setTimeout(() => {
-      void writeTabCacheSnapshot(orderTabs(tabsRef.current.map(normalizeTab)))
+      void writeTabCacheSnapshot(orderTabs(tabsRef.current.filter((tab) => !isStaticNowTab(tab)).map(normalizeTab)))
         .then(() => {
           pushDebugEvent("cache write ok");
         })
@@ -1021,7 +1173,11 @@ function App() {
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.target instanceof Element && event.target.closest(".tool-node")) return;
-    if (!canEdit) {
+    if (activeTabIsStaticNow && isStaticToolObjectTarget(event.target)) {
+      triggerClonePrompt(activeTab.id);
+      return;
+    }
+    if (!canEdit && !activeTabIsStaticNow) {
       triggerClonePrompt();
     }
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1040,7 +1196,7 @@ function App() {
 
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
-    if (!canEdit) {
+    if (!canEdit && !activeTabIsStaticNow) {
       triggerClonePrompt();
     }
     const local = getSvgPoint(event.clientX, event.clientY);
@@ -1156,7 +1312,7 @@ function App() {
 
   const renameTab = (tabId: string, nextName: string) => {
     const trimmed = normalizeTabName(nextName, "");
-    if (!trimmed) {
+    if (!trimmed || trimmed === NOW_TAB_NAME || tabs.some((tab) => tab.id === tabId && isStaticNowTab(tab))) {
       setRenamingTabId(null);
       return;
     }
@@ -1188,7 +1344,7 @@ function App() {
   };
 
   const deleteClonedTab = async (tab: LayoutTab) => {
-    if (tab.name === "Now") return;
+    if (isStaticNowTab(tab)) return;
     const fallbackTab = displayedTabs.find((item) => item.id !== tab.id) ?? seedTabs.map(normalizeTab)[0];
 
     setActiveTabId((current) => (current === tab.id ? fallbackTab.id : current));
@@ -1219,7 +1375,7 @@ function App() {
     void clearTabCache().catch(() => {
       pushDebugEvent("cache clear failed");
     });
-    const freshTabs = orderTabs(seedTabs.map(normalizeTab));
+    const freshTabs = orderTabs(withStaticNowTab(seedTabs.map(normalizeTab), STATIC_NOW_TAB));
     setTabs(freshTabs);
     setActiveTabId(freshTabs[0].id);
     setSelectedToolId(null);
@@ -1326,7 +1482,7 @@ function App() {
   };
 
   const spoofTabOwner = () => {
-    const nowTab = tabs.find((tab) => tab.name === "Now");
+    const nowTab = tabs.find(isStaticNowTab);
     if (!nowTab) return;
     const spoofId = `spoof-${Math.random().toString(36).slice(2, 8)}`;
     const clone = { ...cloneLayoutTab(nowTab), authorId: spoofId, name: `spoof:${spoofId.slice(6)}` };
@@ -1521,7 +1677,7 @@ function App() {
             id="layer-building-geometry-source"
             className="base-svg-layer"
             aria-label="Shared building geometry"
-            dangerouslySetInnerHTML={{ __html: BUILDING_GEOMETRY_MARKUP }}
+            dangerouslySetInnerHTML={{ __html: activeTabIsStaticNow ? NOW_MARKUP : NOW_GEOMETRY_MARKUP }}
           />
 
           <g id="layer-grid-overlay" className="grid-layer" aria-label="Grid overlay layer">
@@ -1538,7 +1694,7 @@ function App() {
           </g>
 
           <g id="layer-tools" {...{ "inkscape:label": "tools", "inkscape:groupmode": "layer" }}>
-            {activeTab.layout.tools.map((tool) => {
+            {(activeTabIsStaticNow ? [] : activeTab.layout.tools).map((tool) => {
               const selected = tool.id === selectedToolId;
               return (
                 <g
@@ -1638,9 +1794,9 @@ function App() {
             </svg>
           </div>
         )}
-        {hoveredTab && !isHiddenPendingDelete(hoveredTab) && hoveredTab.name !== "Now" && (
+        {showHoveredTabDetails && (
           <div className="tab-detail-popover" aria-live="polite">
-            <span>cloned: {formatDisplayDate(hoveredTab.updatedAt)}</span>
+            <span>cloned: {formatDisplayDate(hoveredTab.createdAt ?? hoveredTab.updatedAt)}</span>
             <span>from: {hoveredTab.clonedFromName ?? "none"}</span>
           </div>
         )}
@@ -1648,7 +1804,7 @@ function App() {
 
       <nav className="sheet-tabs" aria-label="Layout tabs">
         {displayedTabs.map((tab) => {
-          const isNow = tab.name === "Now";
+          const isNow = isStaticNowTab(tab);
           const isActive = tab.id === activeTabId;
           const isUserTab = debugPanel.editOverride || tab.canEdit === true || tab.authorId === localUserId;
           const isRenameStep = tutorialStep === "rename" && isActive;

@@ -1,9 +1,12 @@
 import {
   json,
+  ensureStaticNowRow,
   publicLayoutTab,
   readAuthorIdHeader,
   readTabCreationLimit,
   parseLayoutTabRequest,
+  STATIC_NOW_TAB_ID,
+  STATIC_NOW_TAB_NAME,
   tabCreationLimitResponse,
   validationErrorResponse,
   ValidationError,
@@ -27,6 +30,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       return json({ error: "Missing author id" }, { status: 400 });
     }
 
+    if (body.tab.id === STATIC_NOW_TAB_ID || body.tab.name === STATIC_NOW_TAB_NAME) {
+      return json({ error: "The Now tab is static and cannot be cloned into place" }, { status: 400 });
+    }
+
     const creationLimit = await readTabCreationLimit(env.DB, authorId);
     if (creationLimit) {
       return tabCreationLimitResponse(creationLimit);
@@ -40,6 +47,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       createdAt: updatedAt,
       updatedAt,
     };
+
+    if (tab.clonedFromId === STATIC_NOW_TAB_ID) {
+      await ensureStaticNowRow(env.DB);
+    }
 
     await env.DB.prepare(
       `INSERT INTO tabs

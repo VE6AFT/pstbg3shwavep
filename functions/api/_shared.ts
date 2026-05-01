@@ -80,6 +80,10 @@ export const VALIDATION_LIMITS = {
   hazardsPerTool: 6,
 } as const;
 
+export const STATIC_NOW_TAB_ID = "tab-default";
+export const STATIC_NOW_TAB_NAME = "Now";
+export const STATIC_NOW_LAYOUT: Layout = { unit: "in", tools: [] };
+
 export const TAB_LIMITS = {
   perAuthor: 20,
   total: 2048,
@@ -210,6 +214,16 @@ export async function readTabCreationLimit(db: D1Database, authorId: string): Pr
   if (authorLimitRow) return "per-author";
   if (totalLimitRow) return "total";
   return null;
+}
+
+export async function ensureStaticNowRow(db: D1Database) {
+  await db.prepare(
+    `INSERT OR IGNORE INTO tabs
+      (id, name, author_id, cloned_from_tab_id, layout_json)
+      VALUES (?, ?, NULL, NULL, ?)`,
+  )
+    .bind(STATIC_NOW_TAB_ID, STATIC_NOW_TAB_NAME, JSON.stringify(STATIC_NOW_LAYOUT))
+    .run();
 }
 
 export async function parseLayoutTabRequest(request: Request, options: ValidationOptions = {}) {

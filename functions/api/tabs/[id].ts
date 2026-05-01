@@ -5,6 +5,8 @@ import {
   readLayoutTab,
   readTabCreationLimit,
   parseLayoutTabRequest,
+  STATIC_NOW_TAB_ID,
+  STATIC_NOW_TAB_NAME,
   tabCreationLimitResponse,
   validationErrorResponse,
   ValidationError,
@@ -54,6 +56,10 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
       return json({ error: "Route tab id does not match payload id" }, { status: 400 });
     }
 
+    if (params.id === STATIC_NOW_TAB_ID || body.id === STATIC_NOW_TAB_ID || body.name === STATIC_NOW_TAB_NAME) {
+      return json({ error: "The Now tab is static and cannot be saved" }, { status: 400 });
+    }
+
     const existing = await env.DB.prepare("SELECT author_id, created_at FROM tabs WHERE id = ?").bind(body.id).first<{ author_id: string | null; created_at: string }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to edit this tab" }, { status: 403 });
@@ -99,7 +105,7 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
 
 export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
   try {
-    if (params.id === "tab-default") {
+    if (params.id === STATIC_NOW_TAB_ID) {
       return json({ error: "The Now tab cannot be deleted" }, { status: 400 });
     }
 
