@@ -11,9 +11,10 @@
     "cf:dev": "npx wrangler pages dev dist --d1 DB=pstbg3shwavep",
     "db:migrate:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./schema.sql",
     "db:seed:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./seed.sql",
-    "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --file=./schema.sql",
-    "db:migrate:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --file=./schema.sql",
-    "db:seed:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --file=./seed.sql"
+    "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --env production --file=./schema.sql",
+    "db:migrate:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --file=./schema.sql",
+    "db:seed:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --file=./seed.sql",
+    "db:reset:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --env preview --command \"DROP TABLE IF EXISTS tabs;\" && npm run db:migrate:dev && npm run db:seed:dev"
   },
   "dependencies": {
     "react": "^19.0.0",
