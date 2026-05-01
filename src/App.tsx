@@ -710,7 +710,7 @@ function App() {
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
   const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
 
-  const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
   const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
   const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
@@ -1528,17 +1528,6 @@ function App() {
     setAddToolErrors({});
   };
 
-  const spoofTabOwner = () => {
-    const nowTab = tabs.find(isStaticNowTab);
-    if (!nowTab) return;
-    const spoofId = `spoof-${Math.random().toString(36).slice(2, 8)}`;
-    const clone = { ...cloneLayoutTab(nowTab), authorId: spoofId, name: `spoof:${spoofId.slice(6)}` };
-    setTabs((current) => orderTabs([...current, clone]));
-    setActiveTabId(clone.id);
-    pushDebugEvent(`spoof tab created owner:${spoofId}`);
-  };
-
-
   return (
     <main className="app-shell">
       <section
@@ -1550,14 +1539,29 @@ function App() {
         {debugPanel.isVisible && (
           <DebugPanel
             debugLines={debugLines}
-            editOverride={debugPanel.editOverride}
             events={debugPanel.events}
             logRef={debugPanel.logRef}
             onClearLocalDraft={clearLocalDraft}
             onClose={() => debugPanel.setIsVisible(false)}
-            onSpoofTab={spoofTabOwner}
-            onToggleEditOverride={() => debugPanel.setEditOverride((current) => !current)}
           />
+        )}
+        {!debugPanel.isVisible && debugPanel.showDevLauncher && (
+          <button
+            type="button"
+            className="debug-launcher"
+            onClick={() => debugPanel.setIsVisible(true)}
+            title="Open debug panel"
+            aria-label="Open debug panel"
+          >
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <path className="debug-launcher-helmet" d="M9 28c2-13 12-21 23-21s21 8 23 21l-4 20c-4 5-10 8-19 8s-15-3-19-8L9 28Z" />
+              <path className="debug-launcher-face" d="M17 31c3-5 8-8 15-8s12 3 15 8l-3 14c-3 4-7 6-12 6s-9-2-12-6l-3-14Z" />
+              <path className="debug-launcher-brow" d="M19 32l10 3M45 32l-10 3" />
+              <path className="debug-launcher-mouth" d="M25 44h14" />
+              <circle cx="24" cy="36" r="3" />
+              <circle cx="40" cy="36" r="3" />
+            </svg>
+          </button>
         )}
 
         <div className="bottom-controls-wrap">
@@ -1860,7 +1864,7 @@ function App() {
         {displayedTabs.map((tab) => {
           const isNow = isStaticNowTab(tab);
           const isActive = tab.id === activeTabId;
-          const isUserTab = debugPanel.editOverride || tab.canEdit === true || tab.authorId === localUserId;
+          const isUserTab = tab.canEdit === true || tab.authorId === localUserId;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
