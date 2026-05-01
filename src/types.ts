@@ -22,6 +22,7 @@ export type ToolShape = {
     | "red"
     | "social"
     | "software/it"
+    | "storage"
     | "textiles/leather"
     | "training"
     | "wood";

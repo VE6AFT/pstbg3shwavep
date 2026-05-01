@@ -52,6 +52,7 @@ const STATIC_TOOL_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
   "red",
   "social",
   "software/it",
+  "storage",
   "textiles/leather",
   "training",
   "wood",
@@ -602,6 +603,7 @@ const SCOPE_COLORS = {
   plastics: "#16a085",
   social: "#e67e22",
   "software/it": "#34495e",
+  storage: "#a1a1aa",
   "textiles/leather": "#936639",
   training: "#29b6f6",
   wood: "#f1c40f",
@@ -672,7 +674,6 @@ function App() {
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
-  const [deleteProximity, setDeleteProximity] = useState(0);
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
@@ -715,12 +716,13 @@ function App() {
   }, [activeTabId]);
 
   const paintDeleteZone = useCallback((level: number) => {
-    deleteProximityRef.current = level;
+    const clampedLevel = clamp(level, 0, 1);
+    deleteProximityRef.current = clampedLevel;
     const zone = deleteZoneRef.current;
     if (!zone) return;
-    const visibleLevel = Math.max(level, tutorialStep === "delete" ? 1 : 0);
-    zone.style.background = `rgb(${203 - (203 - 239) * visibleLevel}, ${213 - (213 - 68) * visibleLevel}, ${225 - (225 - 68) * visibleLevel})`;
-    zone.classList.toggle("shaking", level === 1);
+    const visibleLevel = Math.max(clampedLevel, tutorialStep === "delete" ? 1 : 0);
+    zone.style.setProperty("--delete-zone-level", String(visibleLevel));
+    zone.classList.toggle("shaking", clampedLevel === 1);
   }, [tutorialStep]);
 
   const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS, options: { flushDraftClone?: boolean } = {}) => {
@@ -1194,7 +1196,6 @@ function App() {
         }
       }
       paintDeleteZone(0);
-      setDeleteProximity(0);
     }
 
     const pan = panState.current;
@@ -1397,6 +1398,7 @@ function App() {
   const clearLocalDraft = () => {
     localStorage.removeItem(OLD_TABS_STORAGE_KEY);
     localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
+    localStorage.removeItem(CONTROLS_STORAGE_KEY);
     localStorage.removeItem("pstbg3shwavep-tutorial-seen");
     void clearTabCache().catch(() => {
       pushDebugEvent("cache clear failed");
@@ -1540,8 +1542,9 @@ function App() {
         )}
 
         <div className="bottom-controls-wrap">
-          <div className="floorplan-controls" aria-label="Floorplan controls">
+          <div className="floorplan-controls-stack">
             <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} />
+            <div className="floorplan-controls" aria-label="Floorplan controls">
             {canEdit && (
               <button
                 type="button"
@@ -1576,6 +1579,7 @@ function App() {
             </label>
             <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
             <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
+            </div>
           </div>
           {showAddTool && (
             <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
@@ -1639,6 +1643,7 @@ function App() {
                   <option value="plastics">plastics</option>
                   <option value="social">social</option>
                   <option value="software/it">software/it</option>
+                  <option value="storage">storage</option>
                   <option value="textiles/leather">textiles/leather</option>
                   <option value="training">training</option>
                   <option value="wood">wood</option>
@@ -1818,10 +1823,7 @@ function App() {
         {canEdit && (
           <div
             ref={deleteZoneRef}
-            className={`delete-zone ${deleteProximity === 1 ? "shaking" : ""} ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
-            style={{
-              background: `rgb(${203 - (203 - 239) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${213 - (213 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${225 - (225 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)})`,
-            }}
+            className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
             aria-label="Drop here to delete"
           >
             <svg viewBox="0 0 24 24">
@@ -1984,8 +1986,7 @@ function App() {
                     <path d="m13 7 4 4" />
                   </svg>
                 </div>
-                <h3>Rename this tab</h3>
-                <p>Create your Protospace!</p>
+                <h3>Rename this tab and create your Protospace!</h3>
               </>
             )}
             <div className="tutorial-progress-wrap">
