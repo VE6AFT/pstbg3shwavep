@@ -1773,6 +1773,10 @@ function App() {
                   ].filter(Boolean).join(" ")}
                   style={{ color: tool.color }}
                   data-tool-id={tool.id}
+                  data-tool-asset-id={tool.assetId}
+                  data-tool-scope={tool.scope}
+                  data-tool-hazards={tool.hazards?.join(",")}
+                  data-tool-color={tool.color}
                   transform={toolTransform(tool)}
                   onPointerDown={(event) => startToolDrag(event, tool)}
                 >
