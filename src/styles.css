@@ -238,9 +238,7 @@ button {
   line-height: 1;
   letter-spacing: 0;
   text-transform: none;
-  white-space: pre-line;
-  overflow-wrap: break-word;
-  max-width: min(360px, calc(100vw - 72px));
+  white-space: pre;
   pointer-events: none;
   opacity: 0;
   transform: translateY(-50%) translateX(-2px);
