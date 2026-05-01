@@ -184,7 +184,7 @@ button {
   pointer-events: none;
 }
 
-.bottom-controls-wrap > * {
+.bottom-controls-wrap>* {
   pointer-events: auto;
 }
 
@@ -200,19 +200,47 @@ button {
   font-size: 0.75rem;
   font-weight: 800;
   text-transform: lowercase;
+  user-select: none;
 }
 
 .floorplan-controls label,
 .floorplan-controls button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
   gap: 4px;
   min-height: 24px;
+  cursor: pointer;
 }
 
-.floorplan-controls input {
-  margin: 0;
+.floorplan-controls [data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 11px);
+  top: 50%;
+  z-index: 20;
+  padding: 3px 6px;
+  border: 1px solid rgba(32, 36, 39, 0.16);
+  border-radius: 4px;
+  background: rgba(32, 36, 39, 0.94);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(-2px);
+}
+
+.floorplan-controls [data-tooltip]:hover::after,
+.floorplan-controls [data-tooltip]:focus-visible::after,
+.floorplan-controls label[data-tooltip]:has(input:focus-visible)::after {
+  opacity: 1;
+  transform: translateY(-50%);
 }
 
 .diskette-status {
@@ -278,8 +306,15 @@ button {
 }
 
 @keyframes sync-flash {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
 }
 
 .floorplan-controls button {
@@ -290,6 +325,51 @@ button {
   color: var(--ink-soft);
   font: inherit;
   cursor: pointer;
+}
+
+.snap-control {
+  cursor: pointer;
+}
+
+.floorplan-controls input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border: 1px solid rgba(105, 112, 116, 0.45);
+  border-radius: 2px;
+  background: #ffffff;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.floorplan-controls input[type="checkbox"]::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: #202427;
+  transform: scale(0);
+}
+
+.floorplan-controls input[type="checkbox"]:checked::before,
+.snap-control.top-left .snap-checkbox::before {
+  transform: scale(1);
+}
+
+.snap-control.center .snap-checkbox::before {
+  content: "X";
+  width: auto;
+  height: auto;
+  background: transparent;
+  color: #202427;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  transform: scale(1);
 }
 
 .add-tool-form {
@@ -402,7 +482,7 @@ button {
   opacity: 0.15;
   transition: opacity 0.15s ease, transform 0.1s ease;
   z-index: 100;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .delete-zone svg {
@@ -421,9 +501,19 @@ button {
 }
 
 @keyframes bin-shake {
-  0%, 100% { transform: translateX(-50%) rotate(0deg) scale(1.1); }
-  25% { transform: translateX(-50%) rotate(8deg) scale(1.1); }
-  75% { transform: translateX(-50%) rotate(-8deg) scale(1.1); }
+
+  0%,
+  100% {
+    transform: translateX(-50%) rotate(0deg) scale(1.1);
+  }
+
+  25% {
+    transform: translateX(-50%) rotate(8deg) scale(1.1);
+  }
+
+  75% {
+    transform: translateX(-50%) rotate(-8deg) scale(1.1);
+  }
 }
 
 /* Brighten when actively dragging something */
@@ -754,8 +844,17 @@ button {
 }
 
 @keyframes flash-clone {
-  0%, 100% { transform: translateX(-50%) translateY(0) scale(1); background: var(--success); }
-  50% { transform: translateX(-50%) translateY(-6px) scale(1.32); background: var(--accent); }
+
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0) scale(1);
+    background: var(--success);
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(-6px) scale(1.32);
+    background: var(--accent);
+  }
 }
 
 .delete-zone.tutorial-pulse {
@@ -764,8 +863,17 @@ button {
 }
 
 @keyframes delete-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(159, 64, 59, 0.4); }
-  50% { transform: scale(1.3); box-shadow: 0 0 20px 10px rgba(159, 64, 59, 0); }
+
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0.4);
+  }
+
+  50% {
+    transform: scale(1.3);
+    box-shadow: 0 0 20px 10px rgba(159, 64, 59, 0);
+  }
 }
 
 .add-tool-form.tutorial-glow {
@@ -774,8 +882,15 @@ button {
 }
 
 @keyframes form-glow {
-  0%, 100% { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-  50% { box-shadow: 0 0 25px 5px rgba(34, 113, 129, 0.3); }
+
+  0%,
+  100% {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  50% {
+    box-shadow: 0 0 25px 5px rgba(34, 113, 129, 0.3);
+  }
 }
 
 .tutorial-overlay {
@@ -794,7 +909,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 24px;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -805,8 +920,15 @@ button {
 }
 
 @keyframes tip-in {
-  from { opacity: 0; transform: translateY(20px) scale(0.9); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .tutorial-tip h3 {
@@ -863,13 +985,96 @@ button {
   border-color: rgba(34, 113, 129, 0.32);
   background: rgba(34, 113, 129, 0.08);
 }
-.tutorial-highlight { outline: 3px solid var(--accent); outline-offset: 4px; animation: pulse-highlight 2s ease-in-out infinite; } @keyframes pulse-highlight { 0%, 100% { outline-color: var(--accent); } 50% { outline-color: transparent; } } .tutorial-progress-wrap { margin-top: 16px; width: 100%; } .tutorial-progress-bar { height: 4px; background: var(--accent); width: 100%; transform-origin: left; animation: tutorial-total-timer 25s linear forwards; } @keyframes tutorial-total-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } } .tutorial-markers { display: flex; justify-content: space-between; margin-top: 6px; padding: 0 4px; } .tutorial-marker { width: 8px; height: 8px; border-radius: 50%; background: #e2e8f0; transition: background 0.3s ease; } .tutorial-marker.filled { background: var(--accent); }
-.clone-tab.always-visible, .rename-tab.always-visible, .delete-tab.always-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.tutorial-highlight {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+  animation: pulse-highlight 2s ease-in-out infinite;
+}
+
+@keyframes pulse-highlight {
+
+  0%,
+  100% {
+    outline-color: var(--accent);
+  }
+
+  50% {
+    outline-color: transparent;
+  }
+}
+
+.tutorial-progress-wrap {
+  margin-top: 16px;
+  width: 100%;
+}
+
+.tutorial-progress-bar {
+  height: 4px;
+  background: var(--accent);
+  width: 100%;
+  transform-origin: left;
+  animation: tutorial-total-timer 25s linear forwards;
+}
+
+@keyframes tutorial-total-timer {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.tutorial-markers {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding: 0 4px;
+}
+
+.tutorial-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  transition: background 0.3s ease;
+}
+
+.tutorial-marker.filled {
+  background: var(--accent);
+}
+
+.clone-tab.always-visible,
+.rename-tab.always-visible,
+.delete-tab.always-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .rename-tab.flashing {
   animation: flash-rename 1.5s ease-in-out infinite;
 }
+
 @keyframes flash-rename {
-  0%, 100% { transform: translateX(-50%) scale(1); background: #ffffff; border-color: var(--accent); }
-  50% { transform: translateX(-50%) scale(1.15); background: #ffffff; border-color: #ffffff; box-shadow: 0 0 15px var(--accent); }
+
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1);
+    background: #ffffff;
+    border-color: var(--accent);
+  }
+
+  50% {
+    transform: translateX(-50%) scale(1.15);
+    background: #ffffff;
+    border-color: #ffffff;
+    box-shadow: 0 0 15px var(--accent);
+  }
 }
-.rename-tab.tutorial-highlight { border: 2px solid var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+.rename-tab.tutorial-highlight {
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}

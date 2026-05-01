@@ -34,6 +34,7 @@ const LOCAL_WRITE_DELAY_MS = 2500;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const TUTORIAL_STEP_MS = 5000;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
+const SNAP_MODES = ["off", "top-left", "center"] as const;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
@@ -67,13 +68,14 @@ const STATIC_TOOL_HAZARDS = new Set<NonNullable<ToolShape["hazards"]>[number]>([
 function loadControls() {
   try {
     const raw = localStorage.getItem(CONTROLS_STORAGE_KEY);
-    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; showInfra?: boolean; showMezz?: boolean };
+    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; snapMode?: SnapMode; showInfra?: boolean; showMezz?: boolean };
   } catch {
     return {};
   }
 }
 
 const STAGE_PAD = 200;
+const GRID_SIZE_INCHES = 12;
 
 type DragState = {
   pointerId: number;
@@ -111,6 +113,7 @@ type ClonePrompt = {
   run: number;
 } | null;
 type TutorialStep = typeof TUTORIAL_STEPS[number];
+type SnapMode = typeof SNAP_MODES[number];
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -385,6 +388,41 @@ function clampToolPosition(tool: Pick<ToolShape, "width" | "height">, x: number,
   };
 }
 
+function snapToGrid(value: number) {
+  return Math.round(value / GRID_SIZE_INCHES) * GRID_SIZE_INCHES;
+}
+
+function snapToolTopLeftPosition(tool: Pick<ToolShape, "width" | "height">, x: number, y: number) {
+  return clampToolPosition(tool, snapToGrid(x), snapToGrid(y));
+}
+
+function snapToolCenterPosition(tool: Pick<ToolShape, "width" | "height">, x: number, y: number) {
+  const snappedCenterX = snapToGrid(x + tool.width / 2);
+  const snappedCenterY = snapToGrid(y + tool.height / 2);
+  return clampToolPosition(tool, snappedCenterX - tool.width / 2, snappedCenterY - tool.height / 2);
+}
+
+function snapToolPosition(tool: Pick<ToolShape, "width" | "height">, x: number, y: number, mode: SnapMode) {
+  if (mode === "top-left") return snapToolTopLeftPosition(tool, x, y);
+  if (mode === "center") return snapToolCenterPosition(tool, x, y);
+  return clampToolPosition(tool, x, y);
+}
+
+function isSnapMode(value: unknown): value is SnapMode {
+  return typeof value === "string" && SNAP_MODES.includes(value as SnapMode);
+}
+
+function nextSnapMode(mode: SnapMode): SnapMode {
+  const index = SNAP_MODES.indexOf(mode);
+  return SNAP_MODES[(index + 1) % SNAP_MODES.length];
+}
+
+function snapModeLabel(mode: SnapMode) {
+  if (mode === "top-left") return "top-left";
+  if (mode === "center") return "center";
+  return "off";
+}
+
 function clampTool(tool: ToolShape): ToolShape {
   const position = clampToolPosition(tool, tool.x, tool.y);
   return {
@@ -616,6 +654,10 @@ function App() {
   const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
+  const [snapMode, setSnapMode] = useState<SnapMode>(() => {
+    const mode = loadControls().snapMode;
+    return isSnapMode(mode) ? mode : "top-left";
+  });
   const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? false);
   const [showMezz, setShowMezz] = useState(() => loadControls().showMezz ?? true);
   const debugPanel = useDebugPanel();
@@ -965,9 +1007,9 @@ function App() {
   useEffect(() => {
     localStorage.setItem(
       CONTROLS_STORAGE_KEY,
-      JSON.stringify({ gridDark, showInfra, showMezz })
+      JSON.stringify({ gridDark, snapMode, showInfra, showMezz })
     );
-  }, [gridDark, showInfra, showMezz]);
+  }, [gridDark, snapMode, showInfra, showMezz]);
 
   useEffect(() => {
     if (!cacheReady) return;
@@ -1061,7 +1103,9 @@ function App() {
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       const local = svgPointFromMatrix(current.inverseScreenMatrix, event.clientX, event.clientY);
-      const next = clampToolPosition(current, local.x - current.offsetX, local.y - current.offsetY);
+      const nextX = local.x - current.offsetX;
+      const nextY = local.y - current.offsetY;
+      const next = snapToolPosition(current, nextX, nextY, snapMode);
       current.latestX = next.x;
       current.latestY = next.y;
       current.element.setAttribute(
@@ -1516,6 +1560,17 @@ function App() {
               <input type="checkbox" checked={gridDark} onChange={(event) => setGridDark(event.target.checked)} />
               grid
             </label>
+            <label className={`snap-control ${snapMode}`} data-tooltip={snapMode === "off" ? undefined : snapModeLabel(snapMode)}>
+              <input
+                type="checkbox"
+                className="snap-checkbox"
+                checked={snapMode !== "off"}
+                aria-label={`snap: ${snapModeLabel(snapMode)}`}
+                aria-checked={snapMode === "center" ? "mixed" : snapMode !== "off"}
+                onChange={() => setSnapMode((current) => nextSnapMode(current))}
+              />
+              snap
+            </label>
             <label>
               <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
               mezz
@@ -1524,8 +1579,8 @@ function App() {
               <input type="checkbox" checked={showInfra} onChange={(event) => setShowInfra(event.target.checked)} />
               infra
             </label>
-            <button type="button" onClick={exportSvg}>export</button>
-            <button type="button" onClick={exportPng}>photo</button>
+            <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
+            <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
           </div>
           {showAddTool && (
             <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
@@ -1718,7 +1773,7 @@ function App() {
                       {(() => {
                         let cx = tool.width - 4;
                         return tool.hazards.map((h) => {
-                          const hw = h === "dirt" ? 11 : h === "fire" ? 13 : h === "dust" ? 8 : h === "eyes" ? 8 : 6;
+                          const hw = h === "dirt" ? 11 : h === "fire" ? 10 : h === "eyes" ? 12 : h === "dust" ? 8 : 6;
                           cx -= hw / 2;
                           const x = cx;
                           cx -= hw / 2 + 4;
@@ -1742,15 +1797,17 @@ function App() {
                               )}
                               {h === "wet" && <path d="M0 2 C0 2 -3 6 -3 8 C-3 9.6 -1.7 11 0 11 C1.7 11 3 9.6 3 8 C3 6 0 2 0 2 Z" fill="currentColor" />}
                               {h === "fire" && (
-                                <g transform="translate(-8.1, -1.5) scale(0.7)">
+                                <g transform="translate(-5.7, 0.8) scale(0.52)">
                                   <path d="M5.926 20.574a7.26 7.26 0 0 0 3.039 1.511c.107.035.179-.105.107-.175-2.395-2.285-1.079-4.758-.107-5.873.693-.796 1.68-2.107 1.608-3.865 0-.176.18-.317.322-.211 1.359.703 2.288 2.25 2.538 3.515.394-.386.537-.984.537-1.511 0-.176.214-.317.393-.176 1.287 1.16 3.503 5.097-.072 8.19-.071.071 0 .212.072.177a8.761 8.761 0 0 0 3.003-1.442c5.827-4.5 2.037-12.48-.43-15.116-.321-.317-.893-.106-.893.351-.036.95-.322 2.004-1.072 2.707-.572-2.39-2.478-5.105-5.195-6.441-.357-.176-.786.105-.75.492.07 3.27-2.063 5.352-3.922 8.059-1.645 2.425-2.717 6.89.822 9.808z" fill="currentColor" />
                                 </g>
                               )}
                               {h === "eyes" && (
-                                <g transform="translate(0, 8)">
-                                  <circle cx="0" cy="0" r="1.2" fill="white" />
-                                  <circle cx="0" cy="0" r="0.6" fill="currentColor" />
-                                </g>
+                                <path
+                                  d="M-6 7.1 C-4.45 4.8 -2.25 3.7 0 3.7 C2.25 3.7 4.45 4.8 6 7.1 C4.45 9.4 2.25 10.5 0 10.5 C-2.25 10.5 -4.45 9.4 -6 7.1 Z M0 5.7 A1.4 1.4 0 1 0 0 8.5 A1.4 1.4 0 1 0 0 5.7 Z"
+                                  fill="currentColor"
+                                  fillRule="evenodd"
+                                  clipRule="evenodd"
+                                />
                               )}
                             </g>
                           );
