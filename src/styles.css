@@ -216,6 +216,7 @@ button {
 }
 
 .diskette-status {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -251,7 +252,7 @@ button {
 }
 
 .diskette-status .warning {
-  color: var(--warning);
+  color: #d99a18;
 }
 
 .diskette-status .success {
@@ -260,6 +261,20 @@ button {
 
 .diskette-status.saving .success {
   animation: sync-flash 0.65s ease-in-out infinite;
+}
+
+.diskette-status.offline::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 24px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--danger);
+  transform: rotate(-45deg);
+  transform-origin: left center;
+  pointer-events: none;
 }
 
 @keyframes sync-flash {

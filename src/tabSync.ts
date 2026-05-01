@@ -1,6 +1,6 @@
 import type { LayoutTab } from "./types";
 
-export type DisketteStatus = "offline" | "saving" | "dirty" | "synced";
+export type DisketteStatus = "saving" | "dirty" | "synced";
 
 const FLUSHABLE_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "delete-pending"]);
 const UNSYNCED_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "saving", "error", "delete-pending"]);
@@ -73,17 +73,17 @@ export function mergeRemoteTabSummaries(remoteTabs: LayoutTab[], currentTabs: La
   return merged;
 }
 
-export function getDisketteStatus(tabs: LayoutTab[], dbReachable: boolean, syncInFlight: boolean): DisketteStatus {
-  if (!dbReachable) return "offline";
+export function getDisketteStatus(tabs: LayoutTab[], _dbReachable: boolean, syncInFlight: boolean): DisketteStatus {
   if (syncInFlight || tabs.some((tab) => tab.syncState === "saving")) return "saving";
   if (tabs.some(isUnsyncedTab)) return "dirty";
   return "synced";
 }
 
-export function disketteStatusLabel(status: DisketteStatus) {
+export function disketteStatusLabel(status: DisketteStatus, dbReachable: boolean) {
+  if (!dbReachable && status === "dirty") return "Database offline; local changes waiting to sync";
+  if (!dbReachable) return "Database offline";
+
   switch (status) {
-    case "offline":
-      return "Database offline; changes are local";
     case "saving":
       return "Saving changes to database";
     case "dirty":

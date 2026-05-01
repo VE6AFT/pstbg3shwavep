@@ -110,8 +110,9 @@ describe("remote/local tab sync merge", () => {
 });
 
 describe("diskette status", () => {
-  it("prioritizes offline, saving, dirty, and synced status", () => {
-    expect(getDisketteStatus([makeTab()], false, false)).toBe("offline");
+  it("keeps offline as a separate visual overlay from sync status", () => {
+    expect(getDisketteStatus([makeTab({ syncState: "dirty" })], false, false)).toBe("dirty");
+    expect(getDisketteStatus([makeTab()], false, false)).toBe("synced");
     expect(getDisketteStatus([makeTab({ syncState: "dirty" })], true, true)).toBe("saving");
     expect(getDisketteStatus([makeTab({ syncState: "dirty" })], true, false)).toBe("dirty");
     expect(getDisketteStatus([makeTab()], true, false)).toBe("synced");

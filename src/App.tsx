@@ -32,6 +32,8 @@ const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 2500;
 const DEFAULT_SAVE_DELAY_MS = 5000;
+const TUTORIAL_STEP_MS = 5000;
+const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
@@ -108,6 +110,7 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
+type TutorialStep = typeof TUTORIAL_STEPS[number];
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -477,9 +480,11 @@ async function saveTab(tab: LayoutTab, authorId: string) {
 
 class LimitError extends Error { }
 
+const TERMINAL_SYNC_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
+
 function isTerminalSyncError(error: unknown) {
   return error instanceof LimitError
-    || (error instanceof RequestError && error.status !== undefined && error.status >= 400 && error.status < 500);
+    || (error instanceof RequestError && error.status !== undefined && TERMINAL_SYNC_STATUSES.has(error.status));
 }
 
 function syncErrorMessage(error: unknown) {
@@ -580,19 +585,13 @@ const SCOPE_COLORS = {
   blue: "#0000ff",
 } as const;
 
-function DisketteStatusIcon({ status, label }: { status: ReturnType<typeof getDisketteStatus>; label: string }) {
+function DisketteStatusIcon({ status, label, offline }: { status: ReturnType<typeof getDisketteStatus>; label: string; offline: boolean }) {
   return (
-    <div className={`diskette-status ${status}`} title={label} aria-label={label} role="status">
+    <div className={`diskette-status ${status} ${offline ? "offline" : ""}`} aria-label={label} role="status">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path className="disk-body" d="M4 3h13l3 3v15H4V3Z" />
         <path className="disk-label" d="M7 3v7h10V3" />
         <path className="disk-slot" d="M8 17h8" />
-        {status === "offline" && (
-          <g className="disk-badge danger">
-            <circle cx="17.5" cy="17.5" r="4" />
-            <path d="m15.5 15.5 4 4M19.5 15.5l-4 4" />
-          </g>
-        )}
         {status === "dirty" && (
           <g className="disk-badge warning">
             <circle cx="17.5" cy="17.5" r="4" />
@@ -643,7 +642,7 @@ function App() {
   const syncFlushTimer = useRef<number | null>(null);
   const localWriteTimer = useRef<number | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
-  const [tutorialStep, setTutorialStep] = useState<null | "zoom" | "rotate" | "delete" | "add" | "rename">(null);
+  const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [deleteProximity, setDeleteProximity] = useState(0);
   const [cacheReady, setCacheReady] = useState(false);
@@ -667,7 +666,7 @@ function App() {
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
   const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
-  const disketteLabel = disketteStatusLabel(disketteStatus);
+  const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -796,25 +795,27 @@ function App() {
   }, [flushUnsyncedTabs]);
 
   useEffect(() => {
-    if (tutorialStep && tutorialStep !== "rename") {
-      const timer = setTimeout(() => {
-        const steps = ["zoom", "rotate", "delete", "add", "rename"] as const;
-        const idx = steps.indexOf(tutorialStep as any);
-        const next = steps[idx + 1];
-        if (next === "add") setShowAddTool(true);
-        if (tutorialStep === "add") setShowAddTool(false);
-        setTutorialStep((next || null) as any);
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [tutorialStep]);
+    if (!tutorialStep) return;
 
-  useEffect(() => {
-    if (tutorialStep === "rename") {
-      const handleDismiss = () => setTutorialStep(null);
-      window.addEventListener("mousedown", handleDismiss, { once: true });
-      return () => window.removeEventListener("mousedown", handleDismiss);
+    if (tutorialStep === "add") {
+      setShowAddTool(true);
     }
+
+    const timer = window.setTimeout(() => {
+      const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
+      const nextStep = TUTORIAL_STEPS[currentIndex + 1] ?? null;
+
+      if (nextStep === "add") {
+        setShowAddTool(true);
+      }
+      if (tutorialStep === "add") {
+        setShowAddTool(false);
+      }
+
+      setTutorialStep(nextStep);
+    }, TUTORIAL_STEP_MS);
+
+    return () => window.clearTimeout(timer);
   }, [tutorialStep]);
 
   useEffect(() => {
@@ -853,20 +854,6 @@ function App() {
   useEffect(() => {
     paintDeleteZone(deleteProximityRef.current);
   }, [paintDeleteZone]);
-
-  useEffect(() => {
-    if (showAddTool && tutorialStep === "add") {
-      const handleOutsideClick = (e: MouseEvent) => {
-        const form = document.querySelector(".add-tool-form");
-        if (form && !form.contains(e.target as Node)) {
-          setShowAddTool(false);
-          setTutorialStep("rename");
-        }
-      };
-      window.addEventListener("mousedown", handleOutsideClick);
-      return () => window.removeEventListener("mousedown", handleOutsideClick);
-    }
-  }, [showAddTool, tutorialStep]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1515,12 +1502,12 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls" aria-label="Floorplan controls">
-            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} />
+            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} />
             {canEdit && (
               <button
                 type="button"
                 className={tutorialStep === "add" ? "tutorial-highlight" : ""}
-                onClick={() => setShowAddTool(!showAddTool)}
+                onClick={() => setShowAddTool((current) => (tutorialStep === "add" ? true : !current))}
               >
                 {showAddTool ? "− add" : "+ add"}
               </button>
@@ -1541,7 +1528,7 @@ function App() {
             <button type="button" onClick={exportPng}>photo</button>
           </div>
           {showAddTool && (
-            <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-glow" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
+            <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
                 <input
@@ -1964,9 +1951,8 @@ function App() {
             <div className="tutorial-progress-wrap">
               <div className="tutorial-progress-bar continuous" />
               <div className="tutorial-markers" style={{ position: "relative", height: "8px" }}>
-                {(["zoom", "rotate", "delete", "add", "rename"] as const).map((step, i) => {
-                  const stepsOrder = ["zoom", "rotate", "delete", "add", "rename"];
-                  const currentIndex = stepsOrder.indexOf(tutorialStep || "");
+                {TUTORIAL_STEPS.map((step, i) => {
+                  const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
                   // Right to left placement: Zoom at 80%, Rename at 0%
                   const leftPercent = (4 - i) * 20;
                   return (
