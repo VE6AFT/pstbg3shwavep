@@ -215,6 +215,58 @@ button {
   margin: 0;
 }
 
+.diskette-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--line-strong);
+}
+
+.diskette-status svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.diskette-status .disk-body {
+  fill: rgba(255, 255, 255, 0.62);
+}
+
+.diskette-status .disk-badge {
+  stroke-width: 2;
+}
+
+.diskette-status .disk-badge circle {
+  fill: #ffffff;
+}
+
+.diskette-status .danger {
+  color: var(--danger);
+}
+
+.diskette-status .warning {
+  color: var(--warning);
+}
+
+.diskette-status .success {
+  color: var(--success);
+}
+
+.diskette-status.saving .success {
+  animation: sync-flash 0.65s ease-in-out infinite;
+}
+
+@keyframes sync-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 .floorplan-controls button {
   padding: 3px 6px;
   border: 1px solid rgba(105, 112, 116, 0.25);

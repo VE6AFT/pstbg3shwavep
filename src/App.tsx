@@ -12,6 +12,17 @@ import buildingGeometrySvg from "./assets/building-geometry.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
+import {
+  disketteStatusLabel,
+  getDisketteStatus,
+  hasFlushableTabs,
+  isFlushableTab,
+  isHiddenPendingDelete,
+  mergeRemoteTabSummaries,
+  stripSyncMetadata,
+  visibleTabs,
+  withSyncedState,
+} from "./tabSync";
 import type { LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
@@ -204,6 +215,7 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
     clonedFromName: tab.clonedFromName ? normalizeTabName(tab.clonedFromName, "") : null,
     canEdit: tab.canEdit ?? false,
     hasLayout: tab.hasLayout ?? true,
+    syncState: tab.syncState ?? "synced",
     layout: {
       ...tab.layout,
       tools: tab.layout.tools.map((tool) => clampTool(tool)),
@@ -281,6 +293,16 @@ async function fetchTabs(authorId: string) {
   return (await response.json()) as { tabs: LayoutTab[] };
 }
 
+class RequestError extends Error {
+  status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+  }
+}
+
 async function fetchTab(tabId: string, authorId: string) {
   const response = await fetch(`/api/tabs/${tabId}`, {
     headers: { "X-Author-Id": authorId },
@@ -295,11 +317,11 @@ async function saveTab(tab: LayoutTab, authorId: string) {
   const response = await fetch(`/api/tabs/${tab.id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", "X-Author-Id": authorId },
-    body: JSON.stringify(tab),
+    body: JSON.stringify(stripSyncMetadata(tab)),
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to save tab: ${response.status}`);
+    throw new RequestError(`Failed to save tab: ${response.status}`, response.status);
   }
 
   return (await response.json()) as SaveResponse;
@@ -307,20 +329,31 @@ async function saveTab(tab: LayoutTab, authorId: string) {
 
 class LimitError extends Error { }
 
+function isTerminalSyncError(error: unknown) {
+  return error instanceof LimitError
+    || (error instanceof RequestError && error.status !== undefined && error.status >= 400 && error.status < 500);
+}
+
+function syncErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unable to sync local changes";
+}
+
 async function persistClone(tab: LayoutTab, authorId: string) {
   const response = await fetch("/api/tabs/clone", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Author-Id": authorId },
-    body: JSON.stringify({ tab }),
+    body: JSON.stringify({ tab: stripSyncMetadata(tab) }),
   });
 
   if (response.status === 429) {
     const body = await response.json().catch(() => ({})) as { error?: string };
-    throw new LimitError(body.error ?? "tab limit reached");
+    const error = new LimitError(body.error ?? "tab limit reached");
+    error.cause = response.status;
+    throw error;
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to clone tab: ${response.status}`);
+    throw new RequestError(`Failed to clone tab: ${response.status}`, response.status);
   }
 
   return (await response.json()) as SaveResponse;
@@ -333,21 +366,8 @@ async function deleteTabFromDb(tabId: string, authorId: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to delete tab: ${response.status}`);
+    throw new RequestError(`Failed to delete tab: ${response.status}`, response.status);
   }
-}
-
-function mergeTabSummaries(summaries: LayoutTab[], currentTabs: LayoutTab[]) {
-  return summaries.map((summary, index) => {
-    const normalized = normalizeTab(summary, index);
-    const current = currentTabs.find((tab) => tab.id === normalized.id);
-    if (!current || current.hasLayout === false || current.updatedAt !== normalized.updatedAt) return normalized;
-    return {
-      ...normalized,
-      layout: current.layout,
-      hasLayout: true,
-    };
-  });
 }
 
 function loadActiveTabId(tabs?: LayoutTab[]) {
@@ -412,6 +432,37 @@ const SCOPE_COLORS = {
   blue: "#0000ff",
 } as const;
 
+function DisketteStatusIcon({ status, label }: { status: ReturnType<typeof getDisketteStatus>; label: string }) {
+  return (
+    <div className={`diskette-status ${status}`} title={label} aria-label={label} role="status">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path className="disk-body" d="M4 3h13l3 3v15H4V3Z" />
+        <path className="disk-label" d="M7 3v7h10V3" />
+        <path className="disk-slot" d="M8 17h8" />
+        {status === "offline" && (
+          <g className="disk-badge danger">
+            <circle cx="17.5" cy="17.5" r="4" />
+            <path d="m15.5 15.5 4 4M19.5 15.5l-4 4" />
+          </g>
+        )}
+        {status === "dirty" && (
+          <g className="disk-badge warning">
+            <circle cx="17.5" cy="17.5" r="4" />
+            <path d="M17.5 14.9v3" />
+            <path d="M17.5 20.1h.01" />
+          </g>
+        )}
+        {(status === "saving" || status === "synced") && (
+          <g className="disk-badge success">
+            <circle cx="17.5" cy="17.5" r="4" />
+            <path d="m15.4 17.4 1.4 1.4 2.8-3" />
+          </g>
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
   const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(seedTabs.map(normalizeTab)));
@@ -441,27 +492,32 @@ function App() {
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
   const panState = useRef<PanState>(null);
-  const saveTimer = useRef<number | null>(null);
+  const syncFlushTimer = useRef<number | null>(null);
   const localWriteTimer = useRef<number | null>(null);
-  const pendingSaveTabId = useRef<string | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const [tutorialStep, setTutorialStep] = useState<null | "zoom" | "rotate" | "delete" | "add" | "rename">(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [deleteProximity, setDeleteProximity] = useState(0);
   const [cacheReady, setCacheReady] = useState(false);
+  const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
+  const [syncInFlight, setSyncInFlight] = useState(false);
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
+  const syncInFlightRef = useRef(false);
   const flashTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
   const initialized = useRef(false);
 
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const displayedTabs = visibleTabs(tabs);
+  const activeTab = displayedTabs.find((tab) => tab.id === activeTabId) ?? displayedTabs[0] ?? tabs[0];
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
 
   const canEdit = activeTabHasLayout && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
+  const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
+  const disketteLabel = disketteStatusLabel(disketteStatus);
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -491,8 +547,20 @@ function App() {
   }, [tutorialStep]);
 
   const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS) => {
-    pendingSaveTabId.current = tabId;
+    const dirtyAt = new Date().toISOString();
     saveDelayMs.current = delayMs;
+    setTabs((current) =>
+      current.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        return {
+          ...tab,
+          syncState: tab.syncState === "local-only" ? "local-only" : "dirty",
+          dirtyAt,
+          syncError: undefined,
+          updatedAt: dirtyAt,
+        };
+      }),
+    );
     pushDebugEvent(`queued write (${message})`);
   }, [pushDebugEvent]);
 
@@ -507,26 +575,75 @@ function App() {
     return point.matrixTransform(matrix.inverse());
   }, []);
 
-  const scheduleSave = useCallback((tabId: string, delayMs: number) => {
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
+  const flushUnsyncedTabs = useCallback(async () => {
+    if (syncInFlightRef.current || !dbReachable) return;
+    const candidates = tabsRef.current.filter(isFlushableTab);
+    if (candidates.length === 0) return;
+
+    syncInFlightRef.current = true;
+    setSyncInFlight(true);
+
+    try {
+      for (const candidate of candidates) {
+        const draft = tabsRef.current.find((tab) => tab.id === candidate.id);
+        if (!draft || !isFlushableTab(draft)) continue;
+
+        try {
+          if (draft.syncState === "delete-pending") {
+            pushDebugEvent("delete retry start");
+            await deleteTabFromDb(draft.id, localUserId);
+            setDbReachable(true);
+            setTabs((current) => current.filter((tab) => tab.id !== draft.id));
+            pushDebugEvent("delete ok");
+            continue;
+          }
+
+          if (draft.syncState === "local-only") {
+            pushDebugEvent("clone retry start");
+            const { tab } = await persistClone(normalizeTab(draft), localUserId);
+            setDbReachable(true);
+            setTabs((current) => orderTabs(current.map((item) => (item.id === draft.id ? withSyncedState(normalizeTab(tab)) : item))));
+            pushDebugEvent("clone ok");
+            continue;
+          }
+
+          pushDebugEvent("save start");
+          const { tab } = await saveTab(normalizeTab(draft), localUserId);
+          setDbReachable(true);
+          setTabs((current) => current.map((item) => (item.id === tab.id ? withSyncedState(normalizeTab(tab)) : item)));
+          pushDebugEvent("save ok");
+        } catch (err) {
+          if (isTerminalSyncError(err)) {
+            setDbReachable(true);
+            const message = syncErrorMessage(err);
+            setTabs((current) =>
+              current.map((tab) => (tab.id === draft.id ? { ...tab, syncState: "error", syncError: message } : tab)),
+            );
+            pushDebugEvent(`sync rejected: ${message}`);
+            continue;
+          }
+
+          setDbReachable(false);
+          pushDebugEvent("sync failed (local only)");
+          break;
+        }
+      }
+    } finally {
+      syncInFlightRef.current = false;
+      setSyncInFlight(false);
+    }
+  }, [dbReachable, localUserId, pushDebugEvent]);
+
+  const scheduleSyncFlush = useCallback((delayMs: number) => {
+    if (syncFlushTimer.current) {
+      window.clearTimeout(syncFlushTimer.current);
     }
 
-    saveTimer.current = window.setTimeout(async () => {
-      const draft = tabsRef.current.find((tab) => tab.id === tabId);
-      if (!draft) return;
-
-      try {
-        pushDebugEvent("save start");
-
-        const { tab } = await saveTab(normalizeTab(draft), localUserId);
-        setTabs((current) => current.map((item) => (item.id === tab.id ? normalizeTab(tab) : item)));
-        pushDebugEvent("save ok");
-      } catch {
-        pushDebugEvent("save failed (local only)");
-      }
+    syncFlushTimer.current = window.setTimeout(() => {
+      syncFlushTimer.current = null;
+      void flushUnsyncedTabs();
     }, delayMs);
-  }, [localUserId, pushDebugEvent]);
+  }, [flushUnsyncedTabs]);
 
   useEffect(() => {
     if (tutorialStep && tutorialStep !== "rename") {
@@ -560,13 +677,28 @@ function App() {
     if (flashTimerRef.current) {
       window.clearTimeout(flashTimerRef.current);
     }
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
+    if (syncFlushTimer.current) {
+      window.clearTimeout(syncFlushTimer.current);
     }
     if (localWriteTimer.current) {
       window.clearTimeout(localWriteTimer.current);
     }
   }, []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setDbReachable(true);
+      scheduleSyncFlush(0);
+    };
+    const handleOffline = () => setDbReachable(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [scheduleSyncFlush]);
 
   useEffect(() => {
     paintDeleteZone(deleteProximityRef.current);
@@ -597,9 +729,10 @@ function App() {
           tabsRef.current = cachedTabs;
           setTabs(cachedTabs);
           setActiveTabId((current) => {
-            const cachedActiveTabId = loadActiveTabId(cachedTabs);
+            const cachedActiveTabId = loadActiveTabId(visibleTabs(cachedTabs));
             if (cachedActiveTabId) return cachedActiveTabId;
-            return cachedTabs.some((tab) => tab.id === current) ? current : cachedTabs[0].id;
+            const visible = visibleTabs(cachedTabs);
+            return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? cachedTabs[0].id;
           });
           pushDebugEvent("cache load ok");
         }
@@ -611,18 +744,23 @@ function App() {
 
       try {
         const { tabs: remoteTabs } = await fetchTabs(localUserId);
-        if (cancelled || remoteTabs.length === 0) return;
-        const normalized = orderTabs(mergeTabSummaries(remoteTabs, tabsRef.current));
+        if (cancelled) return;
+        setDbReachable(true);
+        const normalized = orderTabs(mergeRemoteTabSummaries(remoteTabs.map(normalizeTab), tabsRef.current));
         tabsRef.current = normalized;
         setTabs(normalized);
         setActiveTabId((current) => {
-          const savedTabId = loadActiveTabId(normalized);
+          const visible = visibleTabs(normalized);
+          const savedTabId = loadActiveTabId(visible);
           if (savedTabId) return savedTabId;
-          return normalized.some((tab) => tab.id === current) ? current : normalized[0].id;
+          return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? normalized[0]?.id ?? seedTabs[0].id;
         });
         pushDebugEvent("fetch ok");
       } catch {
-        if (!cancelled) pushDebugEvent("fetch failed (using local)");
+        if (!cancelled) {
+          setDbReachable(false);
+          pushDebugEvent("fetch failed (using local)");
+        }
       } finally {
         initialized.current = true;
       }
@@ -681,7 +819,7 @@ function App() {
   }, [tabs]);
 
   useEffect(() => {
-    if (!tabsRef.current.some((tab) => tab.id === activeTabId)) return;
+    if (!visibleTabs(tabsRef.current).some((tab) => tab.id === activeTabId)) return;
     localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTabId);
   }, [activeTabId, tabs.length]);
 
@@ -711,13 +849,12 @@ function App() {
         });
     }, LOCAL_WRITE_DELAY_MS);
 
-    if (!initialized.current) return;
-    if (pendingSaveTabId.current) {
-      scheduleSave(pendingSaveTabId.current, saveDelayMs.current);
-      pendingSaveTabId.current = null;
+    if (!initialized.current || syncInFlightRef.current || !dbReachable) return;
+    if (hasFlushableTabs(tabs)) {
+      scheduleSyncFlush(saveDelayMs.current);
       saveDelayMs.current = DEFAULT_SAVE_DELAY_MS;
     }
-  }, [cacheReady, pushDebugEvent, scheduleSave, tabs]);
+  }, [cacheReady, dbReachable, pushDebugEvent, scheduleSyncFlush, tabs]);
 
   useEffect(() => {
     activeTabButtonRef.current?.scrollIntoView({
@@ -934,19 +1071,19 @@ function App() {
       ? `${selectedTool.name} ${inchesToFeetInches(selectedTool.width)}x${inchesToFeetInches(selectedTool.height)}`
       : "none";
     const activeTabBytes = estimateJsonBytes(normalizeTab(activeTab));
-    const totalTools = tabs.reduce((count, tab) => count + tab.layout.tools.length, 0);
-    const totalBytes = estimateJsonBytes(tabs.map(normalizeTab));
+    const totalTools = displayedTabs.reduce((count, tab) => count + tab.layout.tools.length, 0);
+    const totalBytes = estimateJsonBytes(displayedTabs.map(normalizeTab));
 
     return [
       `selected: ${selected}`,
       `tab tools: ${activeTab.layout.tools.length} / ${VALIDATION_LIMITS.toolsPerTab}`,
       `tab json: ${formatKiB(activeTabBytes)} / ${formatKiB(VALIDATION_LIMITS.requestBytes)}`,
-      `page tabs: ${tabs.length}`,
+      `page tabs: ${displayedTabs.length}`,
       `page tools: ${totalTools}`,
       `page json: ${formatKiB(totalBytes)}`,
       draggingToolId ? "dragging" : "ready",
     ];
-  }, [activeTab, draggingToolId, selectedTool, tabs]);
+  }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
 
   const handleCloneTab = async (source: LayoutTab) => {
     let sourceTab = source;
@@ -974,7 +1111,16 @@ function App() {
       }
     }
 
-    const clone = { ...cloneLayoutTab(sourceTab), authorId: localUserId, hasLayout: true };
+    const dirtyAt = new Date().toISOString();
+    const clone = {
+      ...cloneLayoutTab(sourceTab),
+      authorId: localUserId,
+      hasLayout: true,
+      syncState: "local-only" as const,
+      dirtyAt,
+      syncError: undefined,
+      updatedAt: dirtyAt,
+    };
     setTabs((current) => orderTabs([...current, clone]));
     setActiveTabId(clone.id);
     setSelectedToolId(null);
@@ -986,19 +1132,25 @@ function App() {
     }
 
     try {
+      syncInFlightRef.current = true;
+      setSyncInFlight(true);
       const { tab } = await persistClone(clone, localUserId);
-      setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? normalizeTab(tab) : item))));
+      setDbReachable(true);
+      setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? withSyncedState(normalizeTab(tab)) : item))));
       pushDebugEvent("clone ok");
     } catch (err) {
-      if (err instanceof LimitError) {
-        // Roll back the optimistic add — limit hit server-side
-        setTabs((current) => current.filter((t) => t.id !== clone.id));
-        setActiveTabId(sourceTab.id);
-        pushDebugEvent(`clone rejected: ${err.message}`);
+      if (isTerminalSyncError(err)) {
+        setDbReachable(true);
+        const message = syncErrorMessage(err);
+        setTabs((current) => current.map((item) => (item.id === clone.id ? { ...item, syncState: "error", syncError: message } : item)));
+        pushDebugEvent(`clone rejected: ${message}`);
         return;
       }
-      pendingSaveTabId.current = clone.id;
+      setDbReachable(false);
       pushDebugEvent("clone failed (local only)");
+    } finally {
+      syncInFlightRef.current = false;
+      setSyncInFlight(false);
     }
   };
 
@@ -1037,19 +1189,27 @@ function App() {
 
   const deleteClonedTab = async (tab: LayoutTab) => {
     if (tab.name === "Now") return;
-    const fallbackTab = tabs.find((item) => item.id !== tab.id) ?? seedTabs.map(normalizeTab)[0];
+    const fallbackTab = displayedTabs.find((item) => item.id !== tab.id) ?? seedTabs.map(normalizeTab)[0];
 
-    setTabs((current) => current.filter((item) => item.id !== tab.id));
     setActiveTabId((current) => (current === tab.id ? fallbackTab.id : current));
     setSelectedToolId(null);
-    pushDebugEvent("delete start");
 
-    try {
-      await deleteTabFromDb(tab.id, localUserId);
-      pushDebugEvent("delete ok");
-    } catch {
-      pushDebugEvent("delete failed (local only)");
+    if (tab.syncState === "local-only") {
+      setTabs((current) => current.filter((item) => item.id !== tab.id));
+      pushDebugEvent("local tab deleted");
+      return;
     }
+
+    const dirtyAt = new Date().toISOString();
+    setTabs((current) =>
+      current.map((item) =>
+        item.id === tab.id
+          ? { ...item, syncState: "delete-pending", dirtyAt, syncError: undefined, updatedAt: dirtyAt }
+          : item,
+      ),
+    );
+    saveDelayMs.current = 0;
+    pushDebugEvent("delete queued");
   };
 
   const clearLocalDraft = () => {
@@ -1199,6 +1359,7 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls" aria-label="Floorplan controls">
+            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} />
             {canEdit && (
               <button
                 type="button"
@@ -1477,7 +1638,7 @@ function App() {
             </svg>
           </div>
         )}
-        {hoveredTab && hoveredTab.name !== "Now" && (
+        {hoveredTab && !isHiddenPendingDelete(hoveredTab) && hoveredTab.name !== "Now" && (
           <div className="tab-detail-popover" aria-live="polite">
             <span>cloned: {formatDisplayDate(hoveredTab.updatedAt)}</span>
             <span>from: {hoveredTab.clonedFromName ?? "none"}</span>
@@ -1486,7 +1647,7 @@ function App() {
       </section>
 
       <nav className="sheet-tabs" aria-label="Layout tabs">
-        {tabs.map((tab) => {
+        {displayedTabs.map((tab) => {
           const isNow = tab.name === "Now";
           const isActive = tab.id === activeTabId;
           const isUserTab = debugPanel.editOverride || tab.canEdit === true || tab.authorId === localUserId;

@@ -2,7 +2,14 @@ name = "pstbg3shwavep"
 compatibility_date = "2026-04-29"
 pages_build_output_dir = "dist"
 
-[[d1_databases]]
+[env.production]
+[[env.production.d1_databases]]
 binding = "DB"
 database_name = "pstbg3shwavep"
 database_id = "8b8c3911-b95d-4e69-90fb-588cff3c5c2c"
+
+[env.preview]
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "pstbg3shwavep-dev"
+database_id = "a1d7e05f-293e-4d4c-86fe-d8292bb78eff"

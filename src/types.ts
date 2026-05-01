@@ -41,6 +41,9 @@ export type LayoutTab = {
   hasLayout?: boolean;
   clonedFromId?: string | null;
   clonedFromName?: string | null;
+  syncState?: SyncState;
+  dirtyAt?: string;
+  syncError?: string;
   layout: Layout;
   createdAt?: string;
   updatedAt?: string;
@@ -49,3 +52,5 @@ export type LayoutTab = {
 export type SaveResponse = {
   tab: LayoutTab;
 };
+
+export type SyncState = "synced" | "dirty" | "saving" | "local-only" | "error" | "delete-pending";

@@ -11,7 +11,9 @@
     "cf:dev": "npx wrangler pages dev dist --d1 DB=pstbg3shwavep",
     "db:migrate:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./schema.sql",
     "db:seed:local": "npx wrangler d1 execute pstbg3shwavep --local --file=./seed.sql",
-    "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --file=./schema.sql"
+    "db:migrate": "npx wrangler d1 execute pstbg3shwavep --remote --file=./schema.sql",
+    "db:migrate:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --file=./schema.sql",
+    "db:seed:dev": "npx wrangler d1 execute pstbg3shwavep-dev --remote --file=./seed.sql"
   },
   "dependencies": {
     "react": "^19.0.0",

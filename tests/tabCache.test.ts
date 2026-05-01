@@ -41,7 +41,7 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
 
 describe("tab cache shaping", () => {
   it("stores D1-like metadata separately from layout payloads", () => {
-    const tab = makeTab();
+    const tab = makeTab({ syncState: "dirty", dirtyAt: "2026-04-30T01:30:00.000Z", syncError: "offline" });
     const meta = toCachedTabMeta(tab);
     const layout = cachedLayoutForTab(tab);
 
@@ -54,6 +54,9 @@ describe("tab cache shaping", () => {
       clonedFromName: "Now",
       hasLayout: true,
       layoutUpdatedAt: "2026-04-30T01:00:00.000Z",
+      syncState: "dirty",
+      dirtyAt: "2026-04-30T01:30:00.000Z",
+      syncError: "offline",
     });
     expect("layout" in meta).toBe(false);
     expect(layout).toEqual({
@@ -75,6 +78,18 @@ describe("tab cache shaping", () => {
       hasLayout: true,
       layout: tab.layout,
     });
+  });
+
+  it("defaults older cache metadata to synced", () => {
+    const summary = tabFromCachedMeta({
+      id: "tab-old",
+      name: "Old Cache",
+      hasLayout: false,
+      clonedFromId: null,
+      clonedFromName: null,
+    });
+
+    expect(summary.syncState).toBe("synced");
   });
 
   it("rejects stale cached layouts by updatedAt", () => {
