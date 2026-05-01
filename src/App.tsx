@@ -7,12 +7,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { VALIDATION_LIMITS } from "../functions/api/_shared";
+import { TAB_LIMITS, VALIDATION_LIMITS } from "../functions/api/_shared";
 import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
 import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
+import { countClientAuthorTabs, isClientAuthorTabLimitReached } from "./tabLimits";
 import {
   disketteStatusLabel,
   getDisketteStatus,
@@ -695,6 +696,7 @@ function App() {
   const syncInFlightRef = useRef(false);
   const flashTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
+  const localAuthorTabCountRef = useRef(0);
   const initialized = useRef(false);
 
   const displayedTabs = visibleTabs(tabs);
@@ -704,6 +706,7 @@ function App() {
   const hoveredTab = hoveredTabId ? tabs.find((tab) => tab.id === hoveredTabId) ?? null : null;
   const showHoveredTabDetails = hoveredTab !== null && !isHiddenPendingDelete(hoveredTab) && !isStaticNowTab(hoveredTab);
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
+  const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (debugPanel.editOverride || activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
@@ -804,6 +807,14 @@ function App() {
           setTabs((current) => current.map((item) => (item.id === tab.id ? withSyncedState(normalizeTab(tab)) : item)));
           pushDebugEvent("save ok");
         } catch (err) {
+          if (draft.syncState === "local-only" && err instanceof LimitError) {
+            setDbReachable(true);
+            localAuthorTabCountRef.current = Math.max(0, localAuthorTabCountRef.current - 1);
+            setTabs((current) => current.filter((tab) => tab.id !== draft.id));
+            setActiveTabId((current) => (current === draft.id ? STATIC_NOW_TAB.id : current));
+            continue;
+          }
+
           if (isTerminalSyncError(err)) {
             setDbReachable(true);
             const message = syncErrorMessage(err);
@@ -997,7 +1008,8 @@ function App() {
 
   useEffect(() => {
     tabsRef.current = tabs;
-  }, [tabs]);
+    localAuthorTabCountRef.current = countClientAuthorTabs(tabs, localUserId);
+  }, [localUserId, tabs]);
 
   useEffect(() => {
     if (!visibleTabs(tabsRef.current).some((tab) => tab.id === activeTabId)) return;
@@ -1273,6 +1285,10 @@ function App() {
   }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
 
   const handleCloneTab = async (source: LayoutTab) => {
+    if (isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
+      return;
+    }
+
     let sourceTab = source;
     if (sourceTab.hasLayout === false) {
       try {
@@ -1298,6 +1314,10 @@ function App() {
       }
     }
 
+    if (localAuthorTabCountRef.current >= TAB_LIMITS.perAuthor) {
+      return;
+    }
+
     const dirtyAt = new Date().toISOString();
     const clone = {
       ...cloneLayoutTab(sourceTab),
@@ -1308,6 +1328,8 @@ function App() {
       syncError: undefined,
       updatedAt: dirtyAt,
     };
+    const previousActiveTabId = activeTabId;
+    localAuthorTabCountRef.current += 1;
     setTabs((current) => orderTabs([...current, clone]));
     setActiveTabId(clone.id);
     setSelectedToolId(null);
@@ -1326,6 +1348,13 @@ function App() {
       setTabs((current) => orderTabs(current.map((item) => (item.id === clone.id ? withSyncedState(normalizeTab(tab)) : item))));
       pushDebugEvent("clone ok");
     } catch (err) {
+      if (err instanceof LimitError) {
+        localAuthorTabCountRef.current = Math.max(0, localAuthorTabCountRef.current - 1);
+        setTabs((current) => current.filter((item) => item.id !== clone.id));
+        setActiveTabId((current) => (current === clone.id ? previousActiveTabId : current));
+        return;
+      }
+
       if (isTerminalSyncError(err)) {
         setDbReachable(true);
         const message = syncErrorMessage(err);
@@ -1895,16 +1924,18 @@ function App() {
                   ×
                 </button>
               )}
-              <button
-                key={`clone-${tab.id}-${isClonePrompted ? clonePrompt.run : 0}`}
-                type="button"
-                className={`clone-tab ${isNow || isClonePrompted ? "always-visible" : ""} ${isClonePrompted ? "flashing" : ""}`}
-                onClick={() => handleCloneTab(tab)}
-                title={`Clone ${tab.name}`}
-                aria-label={`Clone ${tab.name}`}
-              >
-                <span aria-hidden="true">+</span>
-              </button>
+              {canOfferClone && (
+                <button
+                  key={`clone-${tab.id}-${isClonePrompted ? clonePrompt.run : 0}`}
+                  type="button"
+                  className={`clone-tab ${isNow || isClonePrompted ? "always-visible" : ""} ${isClonePrompted ? "flashing" : ""}`}
+                  onClick={() => handleCloneTab(tab)}
+                  title={`Clone ${tab.name}`}
+                  aria-label={`Clone ${tab.name}`}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+              )}
               <div style={{ position: "relative" }}>
                 <button
                   ref={tab.id === activeTab.id ? setActiveTabElement : undefined}
