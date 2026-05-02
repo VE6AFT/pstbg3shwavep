@@ -85,6 +85,7 @@ const GRID_SIZE_INCHES = 12;
 
 type DragState = {
   pointerId: number;
+  tabId: string;
   toolId: string;
   offsetX: number;
   offsetY: number;
@@ -422,6 +423,14 @@ function toolTransform(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "r
   return `translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`;
 }
 
+function isSamePersistedDraft(current: LayoutTab, draft: LayoutTab) {
+  return current.name === draft.name
+    && current.syncState === draft.syncState
+    && current.dirtyAt === draft.dirtyAt
+    && current.updatedAt === draft.updatedAt
+    && JSON.stringify(current.layout) === JSON.stringify(draft.layout);
+}
+
 function svgPointFromMatrix(matrix: DOMMatrix, clientX: number, clientY: number) {
   return new DOMPoint(clientX, clientY).matrixTransform(matrix);
 }
@@ -745,6 +754,7 @@ function App() {
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
+  const deferredSyncFlushRef = useRef(false);
   const flashTimerRef = useRef<number | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const shareFeedbackTimerRef = useRef<number | null>(null);
@@ -865,6 +875,10 @@ function App() {
   }, []);
 
   const flushUnsyncedTabs = useCallback(async () => {
+    if (dragState.current) {
+      deferredSyncFlushRef.current = true;
+      return;
+    }
     if (syncInFlightRef.current || !dbReachable) return;
     const candidates = tabsRef.current.filter(isFlushableTab);
     if (candidates.length === 0) return;
@@ -891,7 +905,18 @@ function App() {
             pushDebugEvent("clone retry start");
             const { tab } = await persistClone(normalizeTab(draft), localUserId);
             setDbReachable(true);
-            setTabs((current) => orderTabs(current.map((item) => (item.id === draft.id ? withSyncedState(normalizeTab(tab)) : item))));
+            setTabs((current) => orderTabs(current.map((item) => {
+              if (item.id !== draft.id) return item;
+              if (!isSamePersistedDraft(item, draft)) {
+                deferredSyncFlushRef.current = true;
+                return {
+                  ...item,
+                  syncState: item.syncState === "local-only" ? "dirty" : item.syncState,
+                  syncError: undefined,
+                };
+              }
+              return withSyncedState(normalizeTab(tab));
+            })));
             pushDebugEvent("clone ok");
             continue;
           }
@@ -899,7 +924,14 @@ function App() {
           pushDebugEvent("save start");
           const { tab } = await saveTab(normalizeTab(draft), localUserId);
           setDbReachable(true);
-          setTabs((current) => current.map((item) => (item.id === tab.id ? withSyncedState(normalizeTab(tab)) : item)));
+          setTabs((current) => current.map((item) => {
+            if (item.id !== tab.id) return item;
+            if (!isSamePersistedDraft(item, draft)) {
+              deferredSyncFlushRef.current = true;
+              return item;
+            }
+            return withSyncedState(normalizeTab(tab));
+          }));
           pushDebugEvent("save ok");
         } catch (err) {
           if (isTabCreationLimitError(err)) {
@@ -934,6 +966,16 @@ function App() {
     } finally {
       syncInFlightRef.current = false;
       setSyncInFlight(false);
+      if (deferredSyncFlushRef.current && !dragState.current && dbReachable) {
+        deferredSyncFlushRef.current = false;
+        if (syncFlushTimer.current) {
+          window.clearTimeout(syncFlushTimer.current);
+        }
+        syncFlushTimer.current = window.setTimeout(() => {
+          syncFlushTimer.current = null;
+          void flushUnsyncedTabs();
+        }, 0);
+      }
     }
   }, [dbReachable, localUserId, pushDebugEvent]);
 
@@ -1216,6 +1258,7 @@ function App() {
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
+      tabId: activeTabId,
       toolId: tool.id,
       offsetX: local.x - tool.x,
       offsetY: local.y - tool.y,
@@ -1289,7 +1332,7 @@ function App() {
       if (current.isOverDelete) {
         setTabs((currentTabs) =>
           currentTabs.map((tab) => {
-            if (tab.id !== activeTabId) return tab;
+            if (tab.id !== current.tabId) return tab;
             return {
               ...tab,
               layout: {
@@ -1300,13 +1343,13 @@ function App() {
             };
           })
         );
-        markTabDirty(activeTabId, "Deleted tool");
+        markTabDirty(current.tabId, "Deleted tool");
       } else {
         const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
         if (moved) {
           setTabs((currentTabs) =>
             currentTabs.map((tab) => {
-              if (tab.id !== activeTabId) return tab;
+              if (tab.id !== current.tabId) return tab;
               return {
                 ...tab,
                 layout: {
@@ -1325,8 +1368,12 @@ function App() {
               };
             }),
           );
-          markTabDirty(activeTabId, "Moved tool");
+          markTabDirty(current.tabId, "Moved tool");
         }
+      }
+      if (deferredSyncFlushRef.current && dbReachable) {
+        deferredSyncFlushRef.current = false;
+        scheduleSyncFlush(0);
       }
       paintDeleteZone(0);
     }
