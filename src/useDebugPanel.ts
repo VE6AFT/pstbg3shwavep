@@ -34,7 +34,7 @@ export function useDebugPanel() {
   const [showDevLauncher] = useState(() => isDevDebugOrigin());
   const [isVisible, setIsVisible] = useState(() => isDevDebugOrigin());
   const [events, setEvents] = useState<DebugEvent[]>(() => [
-    { id: uid("debug"), message: `${formatDebugTime()} boot localStorage:pstbg3shwavep-tabs` },
+    { id: uid("debug"), message: `${formatDebugTime()} boot tab cache` },
   ]);
   const logRef = useRef<HTMLDivElement | null>(null);
   const codeBuffer = useRef("");

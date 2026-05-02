@@ -31,7 +31,6 @@ import {
 import type { LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
-const OLD_TABS_STORAGE_KEY = "pstbg3shwavep-tabs";
 const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 300;
@@ -512,6 +511,11 @@ class LimitError extends Error { }
 
 const TERMINAL_SYNC_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
 
+function isTabCreationLimitError(error: unknown) {
+  return error instanceof LimitError
+    || (error instanceof RequestError && error.status === 429);
+}
+
 function isTerminalSyncError(error: unknown) {
   return error instanceof LimitError
     || (error instanceof RequestError && error.status !== undefined && TERMINAL_SYNC_STATUSES.has(error.status));
@@ -652,17 +656,19 @@ function DisketteStatusIcon({
   label,
   offline,
   syncError,
+  persistentTooltip,
 }: {
   status: ReturnType<typeof getDisketteStatus>;
   label: string;
   offline: boolean;
   syncError?: string;
+  persistentTooltip?: boolean;
 }) {
   const statusLabel = syncError ? `${label}: ${syncError}` : label;
 
   return (
     <div
-      className={`diskette-status ${status} ${offline ? "offline" : ""}`}
+      className={`diskette-status ${status} ${offline ? "offline" : ""} ${persistentTooltip ? "persistent-tooltip" : ""}`}
       aria-label={statusLabel}
       data-tooltip={syncError || undefined}
       role="status"
@@ -736,6 +742,7 @@ function App() {
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
+  const [tabCreationLimitMessage, setTabCreationLimitMessage] = useState<string | null>(null);
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
@@ -752,7 +759,7 @@ function App() {
   const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
-  const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
+  const canOfferClone = !tabCreationLimitMessage && !isClientAuthorTabLimitReached(tabs, localUserId);
   const canShareActiveTab = isShareableTab(activeTab);
   const shareTooltip = !canShareActiveTab
     ? undefined
@@ -764,9 +771,11 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
-  const disketteStatus = getDisketteStatus(activeTab ? [activeTab] : [], dbReachable, syncInFlight);
-  const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
-  const disketteSyncError = activeTab?.syncError;
+  const disketteStatus = tabCreationLimitMessage
+    ? "dirty"
+    : getDisketteStatus(activeTab ? [activeTab] : [], dbReachable, syncInFlight);
+  const disketteLabel = tabCreationLimitMessage ? "Tab creation blocked" : disketteStatusLabel(disketteStatus, dbReachable);
+  const disketteSyncError = tabCreationLimitMessage ?? activeTab?.syncError;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -782,6 +791,7 @@ function App() {
   }, []);
 
   const triggerClonePrompt = useCallback((tabId = activeTabId) => {
+    if (tabCreationLimitMessage) return;
     if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
     clonePromptRunRef.current += 1;
     const run = clonePromptRunRef.current;
@@ -793,7 +803,7 @@ function App() {
         return null;
       });
     }, 900);
-  }, [activeTabId]);
+  }, [activeTabId, tabCreationLimitMessage]);
 
   const paintDeleteZone = useCallback((level: number) => {
     const clampedLevel = clamp(level, 0, 1);
@@ -880,6 +890,12 @@ function App() {
           setTabs((current) => current.map((item) => (item.id === tab.id ? withSyncedState(normalizeTab(tab)) : item)));
           pushDebugEvent("save ok");
         } catch (err) {
+          if (isTabCreationLimitError(err)) {
+            const message = syncErrorMessage(err);
+            setTabCreationLimitMessage(message);
+            pushDebugEvent(`tab creation blocked: ${message}`);
+          }
+
           if (draft.syncState === "local-only" && err instanceof LimitError) {
             setDbReachable(true);
             localAuthorTabCountRef.current = Math.max(0, localAuthorTabCountRef.current - 1);
@@ -1382,7 +1398,7 @@ function App() {
   }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
 
   const handleCloneTab = async (source: LayoutTab) => {
-    if (isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
+    if (tabCreationLimitMessage || isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
       return;
     }
 
@@ -1530,7 +1546,6 @@ function App() {
   };
 
   const clearLocalDraft = () => {
-    localStorage.removeItem(OLD_TABS_STORAGE_KEY);
     localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
     localStorage.removeItem(CONTROLS_STORAGE_KEY);
     localStorage.removeItem("pstbg3shwavep-tutorial-seen");
@@ -1699,8 +1714,14 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls-stack">
-            {!activeTabIsStaticNow && (
-              <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} syncError={disketteSyncError} />
+            {(!activeTabIsStaticNow || tabCreationLimitMessage) && (
+              <DisketteStatusIcon
+                status={disketteStatus}
+                label={disketteLabel}
+                offline={!dbReachable}
+                syncError={disketteSyncError}
+                persistentTooltip={Boolean(tabCreationLimitMessage)}
+              />
             )}
             <div className="floorplan-controls" aria-label="Floorplan controls">
               <button

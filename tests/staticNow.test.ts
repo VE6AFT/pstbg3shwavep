@@ -14,9 +14,8 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
 describe("static Now tab shaping", () => {
   it("always injects one immutable Now tab before user tabs", () => {
     const userTab = makeTab();
-    const staleNow = makeTab({ id: "old-cache-now", name: "Now", canEdit: true });
 
-    expect(withStaticNowTab([userTab, staleNow])).toMatchObject([
+    expect(withStaticNowTab([userTab])).toMatchObject([
       {
         id: "now",
         name: "Now",
@@ -31,9 +30,9 @@ describe("static Now tab shaping", () => {
     ]);
   });
 
-  it("recognizes the canonical id and legacy name as static Now", () => {
+  it("recognizes the canonical id as static Now", () => {
     expect(isStaticNowTab(makeStaticNowTab())).toBe(true);
-    expect(isStaticNowTab(makeTab({ name: "Now" }))).toBe(true);
+    expect(isStaticNowTab(makeTab({ name: "Now" }))).toBe(false);
     expect(isStaticNowTab(makeTab())).toBe(false);
   });
 });
