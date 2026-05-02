@@ -528,6 +528,13 @@ button {
   color: var(--accent);
 }
 
+.floorplan-controls button:disabled {
+  border-color: rgba(105, 112, 116, 0.16);
+  background: rgba(255, 255, 255, 0.58);
+  color: rgba(105, 112, 116, 0.58);
+  cursor: default;
+}
+
 .delete-zone {
   --delete-zone-center: translateX(-50%);
   --delete-zone-level: 0;

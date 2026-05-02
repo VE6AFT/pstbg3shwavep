@@ -15,6 +15,7 @@ import { seedTabs } from "./seed";
 import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import { countClientAuthorTabs, isClientAuthorTabLimitReached } from "./tabLimits";
+import { buildTabShareUrl, readSharedTabId } from "./tabShare";
 import {
   disketteStatusLabel,
   getDisketteStatus,
@@ -35,6 +36,7 @@ const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const TAB_DELETE_CONFIRM_MS = 3200;
 const TUTORIAL_STEP_MS = 5000;
+const SHARE_FEEDBACK_MS = 1800;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
@@ -117,6 +119,7 @@ type ClonePrompt = {
 } | null;
 type TutorialStep = typeof TUTORIAL_STEPS[number];
 type SnapMode = typeof SNAP_MODES[number];
+type ShareStatus = "idle" | "copied" | "failed";
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -560,6 +563,38 @@ function loadActiveTabId(tabs?: LayoutTab[]) {
   }
 }
 
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the textarea path for browsers that expose but reject clipboard writes.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+function isShareableTab(tab: LayoutTab | undefined) {
+  return Boolean(tab && !isStaticNowTab(tab) && tab.syncState !== "local-only" && tab.syncState !== "draft-clone");
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -658,8 +693,12 @@ function DisketteStatusIcon({
 
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
+  const [sharedTabId] = useState(() => readSharedTabId());
   const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(withStaticNowTab(seedTabs.map(normalizeTab), STATIC_NOW_TAB)));
-  const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id);
+  const [activeTabId, setActiveTabId] = useState(() => {
+    if (sharedTabId && visibleTabs(tabs).some((tab) => tab.id === sharedTabId)) return sharedTabId;
+    return loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id;
+  });
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
   const [snapMode, setSnapMode] = useState<SnapMode>(() => {
@@ -684,6 +723,7 @@ function App() {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
@@ -702,6 +742,7 @@ function App() {
   const syncInFlightRef = useRef(false);
   const flashTimerRef = useRef<number | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
+  const shareFeedbackTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
   const initialized = useRef(false);
@@ -712,6 +753,14 @@ function App() {
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
   const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
+  const canShareActiveTab = isShareableTab(activeTab);
+  const shareTooltip = !canShareActiveTab
+    ? undefined
+    : shareStatus === "copied"
+      ? "copied link"
+      : shareStatus === "failed"
+        ? "copy failed"
+        : "copy link";
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
@@ -721,6 +770,15 @@ function App() {
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
+  }, []);
+
+  const flashShareStatus = useCallback((status: ShareStatus) => {
+    if (shareFeedbackTimerRef.current) window.clearTimeout(shareFeedbackTimerRef.current);
+    setShareStatus(status);
+    shareFeedbackTimerRef.current = window.setTimeout(() => {
+      shareFeedbackTimerRef.current = null;
+      setShareStatus("idle");
+    }, SHARE_FEEDBACK_MS);
   }, []);
 
   const triggerClonePrompt = useCallback((tabId = activeTabId) => {
@@ -892,12 +950,23 @@ function App() {
     }
   }, [activeTabId, canEdit]);
 
+  useEffect(() => {
+    if (shareFeedbackTimerRef.current) {
+      window.clearTimeout(shareFeedbackTimerRef.current);
+      shareFeedbackTimerRef.current = null;
+    }
+    setShareStatus("idle");
+  }, [activeTabId]);
+
   useEffect(() => () => {
     if (flashTimerRef.current) {
       window.clearTimeout(flashTimerRef.current);
     }
     if (deleteConfirmTimerRef.current) {
       window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+    if (shareFeedbackTimerRef.current) {
+      window.clearTimeout(shareFeedbackTimerRef.current);
     }
     if (syncFlushTimer.current) {
       window.clearTimeout(syncFlushTimer.current);
@@ -931,15 +1000,16 @@ function App() {
 
     const loadTabs = async () => {
       try {
-        const savedTabId = loadActiveTabId();
-        const cachedTabs = orderTabs(withStaticNowTab((await readCachedTabs(savedTabId)).map(normalizeTab), STATIC_NOW_TAB));
+        const focusTabId = sharedTabId ?? loadActiveTabId();
+        const cachedTabs = orderTabs(withStaticNowTab((await readCachedTabs(focusTabId)).map(normalizeTab), STATIC_NOW_TAB));
         if (!cancelled && cachedTabs.length > 0) {
           tabsRef.current = cachedTabs;
           setTabs(cachedTabs);
           setActiveTabId((current) => {
+            const visible = visibleTabs(cachedTabs);
+            if (sharedTabId && visible.some((tab) => tab.id === sharedTabId)) return sharedTabId;
             const cachedActiveTabId = loadActiveTabId(visibleTabs(cachedTabs));
             if (cachedActiveTabId) return cachedActiveTabId;
-            const visible = visibleTabs(cachedTabs);
             return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? cachedTabs[0].id;
           });
           pushDebugEvent("cache load ok");
@@ -961,6 +1031,7 @@ function App() {
         setTabs(normalized);
         setActiveTabId((current) => {
           const visible = visibleTabs(normalized);
+          if (sharedTabId && visible.some((tab) => tab.id === sharedTabId)) return sharedTabId;
           const savedTabId = loadActiveTabId(visible);
           if (savedTabId) return savedTabId;
           return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? normalized[0]?.id ?? seedTabs[0].id;
@@ -981,7 +1052,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [localUserId, pushDebugEvent]);
+  }, [localUserId, pushDebugEvent, sharedTabId]);
 
   useEffect(() => {
     const tab = tabs.find((item) => item.id === activeTabId);
@@ -1520,6 +1591,19 @@ function App() {
     image.src = url;
   };
 
+  const shareActiveTab = async () => {
+    if (!activeTab || !canShareActiveTab) return;
+
+    try {
+      await copyTextToClipboard(buildTabShareUrl(activeTab.id));
+      flashShareStatus("copied");
+      pushDebugEvent("share link copied");
+    } catch {
+      flashShareStatus("failed");
+      pushDebugEvent("share link failed");
+    }
+  };
+
   const handleAddToolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const name = normalizeToolName(addToolForm.name);
@@ -1643,6 +1727,15 @@ function App() {
             </label>
             <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
             <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
+            <button
+              type="button"
+              data-tooltip={shareTooltip}
+              onClick={shareActiveTab}
+              disabled={!canShareActiveTab}
+              aria-label={canShareActiveTab ? `Copy link to ${activeTab.name}` : "Share link unavailable until this tab syncs"}
+            >
+              {shareStatus === "copied" ? "copied" : shareStatus === "failed" ? "failed" : "share"}
+            </button>
             </div>
           </div>
           {showAddTool && (
