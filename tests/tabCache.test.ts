@@ -20,7 +20,6 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
       tools: [
         {
           id: "tool-saw",
-          assetId: "asset-table-saw",
           name: "Table Saw",
           x: 10,
           y: 20,

@@ -1,6 +1,5 @@
 export type ToolShape = {
   id: string;
-  assetId: string;
   name: string;
   x: number;
   y: number;
@@ -8,7 +7,7 @@ export type ToolShape = {
   height: number;
   rotation: number;
   color: string;
-  scope?:
+  activity?:
     | "undefined"
     | "automotive"
     | "blue"
