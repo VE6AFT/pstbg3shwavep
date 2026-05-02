@@ -25,8 +25,6 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, par
         WHEN tabs.author_id IS NOT NULL AND tabs.author_id = ? THEN 1
         ELSE 0
       END AS can_edit,
-      NULL AS cloned_from_tab_id,
-      NULL AS cloned_from_tab_name,
       tabs.layout_json,
       tabs.created_at,
       tabs.updated_at
@@ -83,8 +81,6 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
       ...body,
       authorId: existing ? existing.author_id : authorId,
       canEdit: !existing || existing.author_id === authorId,
-      clonedFromId: null,
-      clonedFromName: null,
       createdAt: existing?.created_at ?? updatedAt,
       updatedAt,
     };

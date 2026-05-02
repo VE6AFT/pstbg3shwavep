@@ -12,10 +12,11 @@ import { readFailedSyncMessage } from "./apiErrors";
 import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
+import { makeShortId } from "./shortId";
 import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import { countClientAuthorTabs, isClientAuthorTabLimitReached } from "./tabLimits";
-import { buildTabShareUrl, readSharedTabId } from "./tabShare";
+import { buildTabShareUrl, readSharedTabId, removeSharedTabFromUrl } from "./tabShare";
 import {
   disketteStatusLabel,
   getDisketteStatus,
@@ -358,8 +359,6 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
   return {
     ...tab,
     name: normalizeTabName(tab.name, fallbackName),
-    clonedFromId: tab.clonedFromId ?? null,
-    clonedFromName: tab.clonedFromName ? normalizeTabName(tab.clonedFromName, "") : null,
     canEdit: tab.canEdit ?? false,
     hasLayout: tab.hasLayout ?? true,
     syncState: tab.syncState ?? "synced",
@@ -443,24 +442,27 @@ function clampViewBox(viewBox: ViewBox): ViewBox {
   };
 }
 
-function cloneLayoutTab(source: LayoutTab): LayoutTab {
-  const nextTabId = uid("tab");
+function cloneLayoutTab(source: LayoutTab, existingTabIds: Iterable<string>): LayoutTab {
+  const nextTabId = makeShortId("tab", existingTabIds);
   const now = new Date().toISOString();
+  const nextToolIds = new Set(source.layout.tools.map((tool) => tool.id));
 
   return {
     ...source,
     id: nextTabId,
     name: formatCloneName(nextTabId),
-    clonedFromId: source.id,
-    clonedFromName: source.name,
     createdAt: now,
     updatedAt: now,
     layout: {
       ...source.layout,
-      tools: source.layout.tools.map((tool) => ({
-        ...tool,
-        id: uid("tool"),
-      })),
+      tools: source.layout.tools.map((tool) => {
+        const id = makeShortId("tool", nextToolIds);
+        nextToolIds.add(id);
+        return {
+          ...tool,
+          id,
+        };
+      }),
     },
   };
 }
@@ -743,6 +745,7 @@ function App() {
   const flashTimerRef = useRef<number | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const shareFeedbackTimerRef = useRef<number | null>(null);
+  const sharedTabUrlCleanedRef = useRef(false);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
   const initialized = useRef(false);
@@ -994,6 +997,15 @@ function App() {
   useEffect(() => {
     paintDeleteZone(deleteProximityRef.current);
   }, [paintDeleteZone]);
+
+  useEffect(() => {
+    if (!sharedTabId || sharedTabUrlCleanedRef.current) return;
+    if (activeTabId !== sharedTabId) return;
+    if (!visibleTabs(tabs).some((tab) => tab.id === sharedTabId)) return;
+
+    removeSharedTabFromUrl();
+    sharedTabUrlCleanedRef.current = true;
+  }, [activeTabId, sharedTabId, tabs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1408,7 +1420,7 @@ function App() {
 
     const dirtyAt = new Date().toISOString();
     const clone = {
-      ...cloneLayoutTab(sourceTab),
+      ...cloneLayoutTab(sourceTab, tabsRef.current.map((tab) => tab.id)),
       authorId: localUserId,
       hasLayout: true,
       syncState: "draft-clone" as const,
@@ -1434,8 +1446,7 @@ function App() {
       setRenamingTabId(null);
       return;
     }
-    const previousName = tabs.find((tab) => tab.id === tabId)?.name;
-    if (trimmed === previousName) {
+    if (trimmed === tabs.find((tab) => tab.id === tabId)?.name) {
       setRenamingTabId(null);
       setRenameDraft("");
       return;
@@ -1448,13 +1459,6 @@ function App() {
             ...tab,
             name: trimmed,
             updatedAt: new Date().toISOString(),
-          };
-        }
-
-        if (tab.clonedFromId === tabId || (!tab.clonedFromId && tab.clonedFromName === previousName)) {
-          return {
-            ...tab,
-            clonedFromName: trimmed,
           };
         }
 
@@ -1512,6 +1516,8 @@ function App() {
     }
 
     setRenamingTabId((current) => (current === tab.id ? null : current));
+    setActiveTabId(tab.id);
+    setSelectedToolId(null);
     setConfirmingDeleteTabId(tab.id);
     deleteConfirmTimerRef.current = window.setTimeout(() => {
       deleteConfirmTimerRef.current = null;
@@ -1621,8 +1627,7 @@ function App() {
     const cx = viewBox.minX + viewBox.width / 2 - w / 2;
     const cy = viewBox.minY + viewBox.height / 2 - h / 2;
 
-    const newTool: ToolShape = {
-      id: uid("tool"),
+    const newTool: Omit<ToolShape, "id"> = {
       assetId: "custom",
       name,
       x: cx,
@@ -1642,7 +1647,13 @@ function App() {
           ...tab,
           layout: {
             ...tab.layout,
-            tools: [...tab.layout.tools, newTool],
+            tools: [
+              ...tab.layout.tools,
+              {
+                ...newTool,
+                id: makeShortId("tool", tab.layout.tools.map((tool) => tool.id)),
+              },
+            ],
           },
         };
       })

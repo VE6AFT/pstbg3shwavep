@@ -7,8 +7,6 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
     id: "tab-owned",
     name: "Owned Draft",
     canEdit: true,
-    clonedFromId: "tab-default",
-    clonedFromName: "Now",
     hasLayout: true,
     layout: {
       unit: "in",

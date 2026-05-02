@@ -15,8 +15,6 @@ export function makeStaticNowTab(layout: Layout = EMPTY_LAYOUT): LayoutTab {
     name: NOW_TAB_NAME,
     canEdit: false,
     hasLayout: true,
-    clonedFromId: null,
-    clonedFromName: null,
     syncState: "synced",
     layout,
   };

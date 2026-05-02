@@ -15,8 +15,6 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
     name: "Owned Draft",
     authorId: "user-local",
     canEdit: true,
-    clonedFromId: "tab-default",
-    clonedFromName: "Now",
     layout: {
       unit: "in",
       tools: [
@@ -50,8 +48,6 @@ describe("tab cache shaping", () => {
       name: "Owned Draft",
       authorId: "user-local",
       canEdit: true,
-      clonedFromId: "tab-default",
-      clonedFromName: "Now",
       hasLayout: true,
       layoutUpdatedAt: "2026-04-30T01:00:00.000Z",
       syncState: "dirty",
@@ -85,8 +81,6 @@ describe("tab cache shaping", () => {
       id: "tab-old",
       name: "Old Cache",
       hasLayout: false,
-      clonedFromId: null,
-      clonedFromName: null,
     });
 
     expect(summary.syncState).toBe("synced");
