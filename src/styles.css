@@ -719,6 +719,7 @@ button {
 }
 
 .sheet-tab {
+  position: relative;
   min-width: 120px;
   height: 37px;
   padding: 0 18px;
@@ -732,6 +733,24 @@ button {
   font-weight: 800;
   line-height: 1;
   cursor: pointer;
+}
+
+.sheet-tab.user-owned::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(34, 113, 129, 0.55);
+  box-shadow: 0 0 0 2px rgba(34, 113, 129, 0.12);
+  pointer-events: none;
+}
+
+.sheet-tab.user-owned.active::before {
+  background: rgba(34, 113, 129, 0.72);
+  box-shadow: 0 0 0 2px rgba(34, 113, 129, 0.16);
 }
 
 .sheet-tab:hover,
