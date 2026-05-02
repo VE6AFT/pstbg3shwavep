@@ -1897,10 +1897,10 @@ function App() {
         >
           <defs>
             <pattern id="grid" width="12" height="12" patternUnits="userSpaceOnUse">
-              <path d="M 12 0 L 0 0 0 12" fill="none" stroke={`rgba(32,36,39,${gridDark ? "0.1" : "0.08"})`} strokeWidth={0.8} />
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#202427" strokeOpacity={gridDark ? 0.1 : 0.08} strokeWidth={0.8} />
             </pattern>
             <pattern id="stage-grid" width="12" height="12" patternUnits="userSpaceOnUse">
-              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="rgba(32,36,39,0.36)" strokeWidth={1.2} />
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#202427" strokeOpacity={0.36} strokeWidth={1.2} />
             </pattern>
           </defs>
 
