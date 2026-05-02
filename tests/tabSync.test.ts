@@ -129,4 +129,18 @@ describe("diskette status", () => {
     expect(getDisketteStatus([makeTab({ syncState: "draft-clone" })], true, false)).toBe("dirty");
     expect(getDisketteStatus([makeTab()], true, false)).toBe("synced");
   });
+
+  it("can represent only the active tab instead of every tab", () => {
+    const activeSynced = makeTab({ id: "active", syncState: "synced" });
+    const inactiveDraft = makeTab({ id: "inactive-draft", syncState: "draft-clone" });
+    const inactiveError = makeTab({ id: "inactive-error", syncState: "error", syncError: "Nope" });
+
+    expect(getDisketteStatus([activeSynced], true, false)).toBe("synced");
+    expect(getDisketteStatus([activeSynced, inactiveDraft, inactiveError], true, false)).toBe("dirty");
+  });
+
+  it("still shows dirty for an active draft clone or error", () => {
+    expect(getDisketteStatus([makeTab({ syncState: "draft-clone" })], true, false)).toBe("dirty");
+    expect(getDisketteStatus([makeTab({ syncState: "error", syncError: "Nope" })], true, false)).toBe("dirty");
+  });
 });

@@ -764,9 +764,9 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
-  const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
+  const disketteStatus = getDisketteStatus(activeTab ? [activeTab] : [], dbReachable, syncInFlight);
   const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
-  const disketteSyncError = tabs.find((tab) => tab.syncError)?.syncError;
+  const disketteSyncError = activeTab?.syncError;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -1699,54 +1699,58 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls-stack">
-            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} syncError={disketteSyncError} />
+            {!activeTabIsStaticNow && (
+              <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} syncError={disketteSyncError} />
+            )}
             <div className="floorplan-controls" aria-label="Floorplan controls">
-            {canEdit && (
               <button
                 type="button"
                 className={tutorialStep === "add" ? "tutorial-highlight" : ""}
-                onClick={() => setShowAddTool((current) => (tutorialStep === "add" ? true : !current))}
+                onClick={() => {
+                  if (!canEdit) return;
+                  setShowAddTool((current) => (tutorialStep === "add" ? true : !current));
+                }}
+                disabled={!canEdit}
               >
                 {showAddTool ? "− add" : "+ add"}
               </button>
-            )}
-            <label>
-              <input type="checkbox" checked={gridDark} onChange={(event) => setGridDark(event.target.checked)} />
-              grid
-            </label>
-            <label className={`snap-control ${snapMode}`} data-tooltip={snapMode === "off" ? undefined : snapModeLabel(snapMode)}>
-              <input
-                type="checkbox"
-                className="snap-checkbox"
-                checked={snapMode !== "off"}
-                aria-label={`snap: ${snapModeLabel(snapMode)}`}
-                aria-checked={snapMode === "center" ? "mixed" : snapMode !== "off"}
-                onChange={() => setSnapMode((current) => nextSnapMode(current))}
-              />
-              snap
-            </label>
-            <label>
-              <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
-              mezz
-            </label>
-            <label>
-              <input type="checkbox" checked={showInfra} onChange={(event) => setShowInfra(event.target.checked)} />
-              infra
-            </label>
-            <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
-            <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
-            <button
-              type="button"
-              data-tooltip={shareTooltip}
-              onClick={shareActiveTab}
-              disabled={!canShareActiveTab}
-              aria-label={canShareActiveTab ? `Copy link to ${activeTab.name}` : "Share link unavailable until this tab syncs"}
-            >
-              {shareStatus === "copied" ? "copied" : shareStatus === "failed" ? "failed" : "share"}
-            </button>
+              <label>
+                <input type="checkbox" checked={gridDark} onChange={(event) => setGridDark(event.target.checked)} />
+                grid
+              </label>
+              <label className={`snap-control ${snapMode}`} data-tooltip={snapMode === "off" ? undefined : snapModeLabel(snapMode)}>
+                <input
+                  type="checkbox"
+                  className="snap-checkbox"
+                  checked={snapMode !== "off"}
+                  aria-label={`snap: ${snapModeLabel(snapMode)}`}
+                  aria-checked={snapMode === "center" ? "mixed" : snapMode !== "off"}
+                  onChange={() => setSnapMode((current) => nextSnapMode(current))}
+                />
+                snap
+              </label>
+              <label>
+                <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
+                mezz
+              </label>
+              <label>
+                <input type="checkbox" checked={showInfra} onChange={(event) => setShowInfra(event.target.checked)} />
+                infra
+              </label>
+              <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
+              <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
+              <button
+                type="button"
+                data-tooltip={shareTooltip}
+                onClick={shareActiveTab}
+                disabled={!canShareActiveTab}
+                aria-label={canShareActiveTab ? `Copy link to ${activeTab.name}` : "Share link unavailable until this tab syncs"}
+              >
+                {shareStatus === "copied" ? "copied" : shareStatus === "failed" ? "failed" : "share"}
+              </button>
             </div>
           </div>
-          {showAddTool && (
+          {showAddTool && canEdit && (
             <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
