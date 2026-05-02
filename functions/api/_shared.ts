@@ -43,8 +43,6 @@ export type LayoutTab = {
   authorId?: string | null;
   canEdit?: boolean;
   hasLayout?: boolean;
-  clonedFromId?: string | null;
-  clonedFromName?: string | null;
   layout: Layout;
   createdAt?: string;
   updatedAt?: string;
@@ -55,8 +53,6 @@ export type TabRow = {
   name: string;
   author_id?: string | null;
   can_edit?: number | boolean | null;
-  cloned_from_tab_id: string | null;
-  cloned_from_tab_name: string | null;
   layout_json?: string | null;
   created_at: string;
   updated_at: string;
@@ -64,10 +60,10 @@ export type TabRow = {
 
 export const VALIDATION_LIMITS = {
   requestBytes: 256 * 1024,
-  tabIdChars: 96,
+  tabIdChars: 32,
   authorIdChars: 128,
   tabNameChars: 24,
-  toolIdChars: 96,
+  toolIdChars: 32,
   toolAssetIdChars: 128,
   toolNameChars: 40,
   toolsPerTab: 500,
@@ -158,8 +154,6 @@ export function readLayoutTab(row: TabRow): LayoutTab {
   const tab: LayoutTab = {
     id: row.id,
     name: row.name,
-    clonedFromId: row.cloned_from_tab_id,
-    clonedFromName: row.cloned_from_tab_name,
     hasLayout,
     layout: hasLayout ? JSON.parse(row.layout_json as string) as Layout : EMPTY_LAYOUT,
     createdAt: row.created_at,
@@ -266,8 +260,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
     id: readId(tab.id, `${path}.id`, VALIDATION_LIMITS.tabIdChars, details),
     name: readString(tab.name, `${path}.name`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
     authorId: readNullableId(tab.authorId, `${path}.authorId`, VALIDATION_LIMITS.authorIdChars, details),
-    clonedFromId: readNullableId(tab.clonedFromId, `${path}.clonedFromId`, VALIDATION_LIMITS.authorIdChars, details),
-    clonedFromName: readNullableString(tab.clonedFromName, `${path}.clonedFromName`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
     layout: {
       unit: "in",
       tools: [],

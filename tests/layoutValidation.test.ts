@@ -33,8 +33,6 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
     id: "tab-default",
     name: "Now",
     authorId: "user-local",
-    clonedFromId: null,
-    clonedFromName: null,
     layout: {
       unit: "in",
       tools: [makeTool()],
@@ -91,6 +89,32 @@ describe("layout tab validation", () => {
 
     expect(parseLayoutTabValue(makeTab({ name: maxName })).name).toBe(maxName);
     expect(() => parseLayoutTabValue(makeTab({ name: `${maxName}a` }))).toThrow(ValidationError);
+  });
+
+  it("limits generated tab and tool ids to compact shared maximums", () => {
+    const maxTabId = "t".repeat(VALIDATION_LIMITS.tabIdChars);
+    const maxToolId = "x".repeat(VALIDATION_LIMITS.toolIdChars);
+
+    expect(parseLayoutTabValue(makeTab({
+      id: maxTabId,
+      layout: {
+        unit: "in",
+        tools: [makeTool({ id: maxToolId })],
+      },
+    }))).toMatchObject({
+      id: maxTabId,
+      layout: {
+        tools: [{ id: maxToolId }],
+      },
+    });
+
+    expect(() => parseLayoutTabValue(makeTab({ id: `${maxTabId}a` }))).toThrow(ValidationError);
+    expect(() => parseLayoutTabValue(makeTab({
+      layout: {
+        unit: "in",
+        tools: [makeTool({ id: `${maxToolId}a` })],
+      },
+    }))).toThrow(ValidationError);
   });
 
   it("limits tool names and sizes to the shared maximums", () => {
@@ -170,8 +194,6 @@ describe("layout tab validation", () => {
       id: "tab-owned",
       name: "Owned Draft",
       can_edit: 1,
-      cloned_from_tab_id: null,
-      cloned_from_tab_name: null,
       layout_json: JSON.stringify(makeTab().layout),
       created_at: "2026-04-30T00:00:00.000Z",
       updated_at: "2026-04-30T00:00:00.000Z",

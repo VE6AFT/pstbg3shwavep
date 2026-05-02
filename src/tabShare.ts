@@ -1,6 +1,6 @@
 import { VALIDATION_LIMITS } from "../functions/api/_shared";
 
-export const TAB_SHARE_PARAM = "tab";
+export const TAB_SHARE_PARAM = "share";
 
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -33,4 +33,19 @@ export function buildTabShareUrl(
   const url = new URL(href);
   url.searchParams.set(TAB_SHARE_PARAM, tabId);
   return url.toString();
+}
+
+export function urlWithoutSharedTab(href: string) {
+  const url = new URL(href);
+  url.searchParams.delete(TAB_SHARE_PARAM);
+  return url.toString();
+}
+
+export function removeSharedTabFromUrl() {
+  if (typeof window === "undefined") return;
+
+  const nextHref = urlWithoutSharedTab(window.location.href);
+  if (nextHref === window.location.href) return;
+
+  window.history.replaceState(window.history.state, "", nextHref);
 }

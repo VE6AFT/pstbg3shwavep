@@ -40,8 +40,6 @@ export type LayoutTab = {
   authorId?: string | null;
   canEdit?: boolean;
   hasLayout?: boolean;
-  clonedFromId?: string | null;
-  clonedFromName?: string | null;
   syncState?: SyncState;
   dirtyAt?: string;
   syncError?: string;
