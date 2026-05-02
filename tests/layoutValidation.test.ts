@@ -14,7 +14,6 @@ import {
 function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
   return {
     id: "tool-saw",
-    assetId: "asset-table-saw",
     name: "Table Saw",
     x: 10,
     y: 20,
@@ -22,7 +21,7 @@ function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
     height: 60,
     rotation: 0,
     color: "#db6b4d",
-    scope: "wood",
+    activity: "wood",
     hazards: ["dust", "noise"],
     ...overrides,
   };
@@ -56,7 +55,7 @@ describe("layout tab validation", () => {
     expect(tab.id).toBe("now");
     expect(tab.name).toBe("Now");
     expect(tab.layout.unit).toBe("in");
-    expect(tab.layout.tools[0].scope).toBe("wood");
+    expect(tab.layout.tools[0].activity).toBe("wood");
     expect(tab.layout.tools[0].hazards).toEqual(["dust", "noise"]);
   });
 
@@ -157,7 +156,7 @@ describe("layout tab validation", () => {
     });
   });
 
-  it("rejects invalid ids, names, numbers, colors, scopes, and hazards", () => {
+  it("rejects invalid ids, names, numbers, colors, activities, and hazards", () => {
     expect(() =>
       parseLayoutTabValue(
         makeTab({
@@ -169,7 +168,7 @@ describe("layout tab validation", () => {
               makeTool({
                 color: "tomato",
                 rotation: Infinity,
-                scope: "not-a-scope" as ToolShape["scope"],
+                activity: "not-an-activity" as ToolShape["activity"],
                 hazards: ["dust", "dust", "lava" as NonNullable<ToolShape["hazards"]>[number]],
               }),
             ],

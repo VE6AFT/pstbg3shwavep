@@ -43,7 +43,7 @@ const SNAP_MODES = ["off", "top-left", "center"] as const;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
-const STATIC_TOOL_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
+const STATIC_TOOL_ACTIVITIES = new Set<NonNullable<ToolShape["activity"]>>([
   "undefined",
   "automotive",
   "blue",
@@ -173,9 +173,9 @@ function staticToolLayers(document: Document) {
   return Array.from(document.querySelectorAll("g")).filter(isToolLayer);
 }
 
-function readStaticToolScope(value: string | null) {
-  if (!value || !STATIC_TOOL_SCOPES.has(value as NonNullable<ToolShape["scope"]>)) return undefined;
-  return value as NonNullable<ToolShape["scope"]>;
+function readStaticToolActivity(value: string | null) {
+  if (!value || !STATIC_TOOL_ACTIVITIES.has(value as NonNullable<ToolShape["activity"]>)) return undefined;
+  return value as NonNullable<ToolShape["activity"]>;
 }
 
 function readStaticToolHazards(value: string | null) {
@@ -226,12 +226,11 @@ function extractStaticNowTools(markup: string): ToolShape[] {
           ?? rect?.getAttribute("stroke")
           ?? rect?.getAttribute("fill")
           ?? "#697074";
-        const scope = readStaticToolScope(group.getAttribute("data-tool-scope"));
+        const activity = readStaticToolActivity(group.getAttribute("data-tool-activity"));
         const hazards = readStaticToolHazards(group.getAttribute("data-tool-hazards"));
 
         return {
           id: group.id,
-          assetId: group.getAttribute("data-tool-asset-id") ?? group.id,
           name: group.getAttribute("inkscape:label")
             ?? group.getAttribute("aria-label")
             ?? group.querySelector("text")?.textContent?.trim()
@@ -242,7 +241,7 @@ function extractStaticNowTools(markup: string): ToolShape[] {
           height: readNumberAttribute(rect, "height", VALIDATION_LIMITS.minSize),
           rotation: readRotation(group.getAttribute("transform")),
           color,
-          ...(scope ? { scope } : {}),
+          ...(activity ? { activity } : {}),
           ...(hazards ? { hazards } : {}),
         };
       }),
@@ -631,7 +630,7 @@ function isValidToolSize(value: number) {
   return Number.isFinite(value) && value >= VALIDATION_LIMITS.minSize && value <= MAX_TOOL_SIZE_INCHES;
 }
 
-const SCOPE_COLORS = {
+const ACTIVITY_COLORS = {
   undefined: "#697074",
   automotive: "#2c3e50",
   electronics: "#27ae60",
@@ -718,7 +717,7 @@ function App() {
     name: "",
     x: "",
     y: "",
-    scope: "undefined" as NonNullable<ToolShape["scope"]>,
+    activity: "undefined" as NonNullable<ToolShape["activity"]>,
     hazards: [] as NonNullable<ToolShape["hazards"]>,
   });
   const [addToolErrors, setAddToolErrors] = useState<Record<string, boolean>>({});
@@ -771,11 +770,24 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const pushDebugEvent = debugPanel.pushEvent;
-  const disketteStatus = tabCreationLimitMessage
+  const syncErrorTab = activeTab?.syncError
+    ? activeTab
+    : displayedTabs.find((tab) => tab.syncError);
+  const syncErrorMessageForDiskette = syncErrorTab?.syncError
+    ? syncErrorTab.id === activeTab?.id
+      ? syncErrorTab.syncError
+      : `${syncErrorTab.name}: ${syncErrorTab.syncError}`
+    : undefined;
+  const persistentDisketteMessage = tabCreationLimitMessage ?? syncErrorMessageForDiskette;
+  const disketteStatus = persistentDisketteMessage
     ? "dirty"
     : getDisketteStatus(activeTab ? [activeTab] : [], dbReachable, syncInFlight);
-  const disketteLabel = tabCreationLimitMessage ? "Tab creation blocked" : disketteStatusLabel(disketteStatus, dbReachable);
-  const disketteSyncError = tabCreationLimitMessage ?? activeTab?.syncError;
+  const disketteLabel = tabCreationLimitMessage
+    ? "Tab creation blocked"
+    : syncErrorTab
+      ? "Sync rejected"
+      : disketteStatusLabel(disketteStatus, dbReachable);
+  const disketteSyncError = persistentDisketteMessage;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
@@ -1640,15 +1652,14 @@ function App() {
     const cy = viewBox.minY + viewBox.height / 2 - h / 2;
 
     const newTool: Omit<ToolShape, "id"> = {
-      assetId: "custom",
       name,
       x: cx,
       y: cy,
       width: w,
       height: h,
       rotation: 0,
-      color: SCOPE_COLORS[addToolForm.scope] ?? SCOPE_COLORS.undefined,
-      scope: addToolForm.scope,
+      color: ACTIVITY_COLORS[addToolForm.activity] ?? ACTIVITY_COLORS.undefined,
+      activity: addToolForm.activity,
       hazards: addToolForm.hazards.length > 0 ? addToolForm.hazards : undefined,
     };
 
@@ -1672,7 +1683,7 @@ function App() {
     );
     markTabDirty(activeTabId, "saving in background");
     setShowAddTool(false);
-    setAddToolForm({ name: "", x: "", y: "", scope: "undefined", hazards: [] });
+    setAddToolForm({ name: "", x: "", y: "", activity: "undefined", hazards: [] });
     setAddToolErrors({});
   };
 
@@ -1714,13 +1725,13 @@ function App() {
 
         <div className="bottom-controls-wrap">
           <div className="floorplan-controls-stack">
-            {(!activeTabIsStaticNow || tabCreationLimitMessage) && (
+            {(!activeTabIsStaticNow || disketteSyncError) && (
               <DisketteStatusIcon
                 status={disketteStatus}
                 label={disketteLabel}
                 offline={!dbReachable}
                 syncError={disketteSyncError}
-                persistentTooltip={Boolean(tabCreationLimitMessage)}
+                persistentTooltip={Boolean(disketteSyncError)}
               />
             )}
             <div className="floorplan-controls" aria-label="Floorplan controls">
@@ -1822,7 +1833,7 @@ function App() {
                 </label>
               </div>
               <label>
-                <select value={addToolForm.scope} onChange={(e) => setAddToolForm({ ...addToolForm, scope: e.target.value as any })}>
+                <select value={addToolForm.activity} onChange={(e) => setAddToolForm({ ...addToolForm, activity: e.target.value as any })}>
                   <option value="undefined">activity</option>
                   <option value="automotive">automotive</option>
                   <option value="electronics">electronics</option>
@@ -1940,8 +1951,7 @@ function App() {
                   ].filter(Boolean).join(" ")}
                   style={{ color: tool.color }}
                   data-tool-id={tool.id}
-                  data-tool-asset-id={tool.assetId}
-                  data-tool-scope={tool.scope}
+                  data-tool-activity={tool.activity}
                   data-tool-hazards={tool.hazards?.join(",")}
                   data-tool-color={tool.color}
                   transform={toolTransform(tool)}
