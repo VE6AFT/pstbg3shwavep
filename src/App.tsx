@@ -33,6 +33,7 @@ const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
+const TAB_DELETE_CONFIRM_MS = 3200;
 const TUTORIAL_STEP_MS = 5000;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
@@ -682,6 +683,7 @@ function App() {
   const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
@@ -699,6 +701,7 @@ function App() {
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
   const flashTimerRef = useRef<number | null>(null);
+  const deleteConfirmTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
   const initialized = useRef(false);
@@ -892,6 +895,9 @@ function App() {
   useEffect(() => () => {
     if (flashTimerRef.current) {
       window.clearTimeout(flashTimerRef.current);
+    }
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
     }
     if (syncFlushTimer.current) {
       window.clearTimeout(syncFlushTimer.current);
@@ -1391,6 +1397,12 @@ function App() {
 
   const deleteClonedTab = async (tab: LayoutTab) => {
     if (isStaticNowTab(tab)) return;
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteTabId((current) => (current === tab.id ? null : current));
+
     const fallbackTab = displayedTabs.find((item) => item.id !== tab.id) ?? seedTabs.map(normalizeTab)[0];
 
     setActiveTabId((current) => (current === tab.id ? fallbackTab.id : current));
@@ -1412,6 +1424,35 @@ function App() {
     );
     saveDelayMs.current = 0;
     pushDebugEvent("delete queued");
+  };
+
+  const cancelAnimatedDelete = () => {
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteTabId(null);
+  };
+
+  const startAnimatedDelete = (tab: LayoutTab) => {
+    if (isStaticNowTab(tab) || confirmingDeleteTabId === tab.id) return;
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+
+    setRenamingTabId((current) => (current === tab.id ? null : current));
+    setConfirmingDeleteTabId(tab.id);
+    deleteConfirmTimerRef.current = window.setTimeout(() => {
+      deleteConfirmTimerRef.current = null;
+      void deleteClonedTab(tab);
+    }, TAB_DELETE_CONFIRM_MS);
+  };
+
+  const holdAnimatedDelete = (event: ReactPointerEvent<HTMLButtonElement>, tab: LayoutTab) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    startAnimatedDelete(tab);
   };
 
   const clearLocalDraft = () => {
@@ -1870,14 +1911,15 @@ function App() {
           const isActive = tab.id === activeTabId;
           const isUserTab = tab.canEdit === true || tab.authorId === localUserId;
           const isOwnTab = !isNow && isUserTab;
-          const tabClassName = `sheet-tab${isActive ? " active" : ""}${isOwnTab ? " user-owned" : ""}`;
+          const tabClassName = `sheet-tab${isActive ? " active" : ""}`;
+          const isConfirmingDelete = confirmingDeleteTabId === tab.id;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
           return (
             <div
               key={tab.id}
-              className="sheet-tab-wrap"
+              className={`sheet-tab-wrap${isConfirmingDelete ? " deleting" : ""}`}
             >
               {isOwnTab && (
                 <button
@@ -1887,7 +1929,6 @@ function App() {
                     setRenamingTabId(tab.id);
                     setRenameDraft(tab.name);
                   }}
-                  title={`Rename ${tab.name}`}
                   aria-label={`Rename ${tab.name}`}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1899,10 +1940,11 @@ function App() {
               {isOwnTab && (
                 <button
                   type="button"
-                  className="delete-tab"
-                  onClick={() => deleteClonedTab(tab)}
-                  title={`Delete ${tab.name}`}
-                  aria-label={`Delete ${tab.name}`}
+                  className={`delete-tab always-visible${isConfirmingDelete ? " confirming" : ""}`}
+                  onPointerDown={(event) => holdAnimatedDelete(event, tab)}
+                  onPointerUp={cancelAnimatedDelete}
+                  onPointerCancel={cancelAnimatedDelete}
+                  aria-label={`Hold to delete ${tab.name}`}
                 >
                   ×
                 </button>
@@ -1913,7 +1955,6 @@ function App() {
                   type="button"
                   className={`clone-tab ${isNow || isClonePrompted ? "always-visible" : ""} ${isClonePrompted ? "flashing" : ""}`}
                   onClick={() => handleCloneTab(tab)}
-                  title={`Clone ${tab.name}`}
                   aria-label={`Clone ${tab.name}`}
                 >
                   <span aria-hidden="true">+</span>

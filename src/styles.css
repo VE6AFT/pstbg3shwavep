@@ -735,24 +735,6 @@ button {
   cursor: pointer;
 }
 
-.sheet-tab.user-owned::before {
-  content: "";
-  position: absolute;
-  top: 8px;
-  left: 9px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(34, 113, 129, 0.55);
-  box-shadow: 0 0 0 2px rgba(34, 113, 129, 0.12);
-  pointer-events: none;
-}
-
-.sheet-tab.user-owned.active::before {
-  background: rgba(34, 113, 129, 0.72);
-  box-shadow: 0 0 0 2px rgba(34, 113, 129, 0.16);
-}
-
 .sheet-tab:hover,
 .sheet-tab.active {
   border-color: var(--accent);
@@ -844,6 +826,80 @@ button {
     opacity 120ms ease,
     transform 120ms ease;
   cursor: pointer;
+}
+
+.sheet-tab-wrap.deleting .rename-tab,
+.sheet-tab-wrap.deleting .clone-tab {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sheet-tab-wrap.deleting .sheet-tab {
+  animation: tab-delete-vanish 3.2s ease-in forwards;
+}
+
+.delete-tab.confirming {
+  z-index: 14;
+  transition: none;
+  animation:
+    tab-delete-grow 3.2s ease-in forwards,
+    tab-delete-wiggle 0.12s steps(2, end) infinite;
+}
+
+@keyframes tab-delete-grow {
+  0% {
+    top: 33px;
+    width: 15px;
+    height: 15px;
+    font-size: 0.74rem;
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0);
+  }
+
+  84%,
+  99% {
+    top: 26px;
+    width: 28px;
+    height: 28px;
+    font-size: 1.35rem;
+    opacity: 1;
+    box-shadow: 0 0 0 8px rgba(159, 64, 59, 0.08);
+  }
+
+  100% {
+    top: 26px;
+    width: 28px;
+    height: 28px;
+    font-size: 1.35rem;
+    opacity: 0;
+    box-shadow: 0 0 0 18px rgba(159, 64, 59, 0);
+  }
+}
+
+@keyframes tab-delete-wiggle {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0) translateX(-3px) rotate(-8deg);
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(0) translateX(3px) rotate(8deg);
+  }
+}
+
+@keyframes tab-delete-vanish {
+  0%,
+  99% {
+    opacity: 1;
+    filter: none;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    filter: saturate(1.6);
+    transform: translateY(4px) scale(0.92);
+  }
 }
 
 .rename-tab svg {
