@@ -1869,6 +1869,8 @@ function App() {
           const isNow = isStaticNowTab(tab);
           const isActive = tab.id === activeTabId;
           const isUserTab = tab.canEdit === true || tab.authorId === localUserId;
+          const isOwnTab = !isNow && isUserTab;
+          const tabClassName = `sheet-tab${isActive ? " active" : ""}${isOwnTab ? " user-owned" : ""}`;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
@@ -1877,7 +1879,7 @@ function App() {
               key={tab.id}
               className="sheet-tab-wrap"
             >
-              {!isNow && isUserTab && (
+              {isOwnTab && (
                 <button
                   type="button"
                   className={`rename-tab ${isRenameStep ? "tutorial-highlight flashing always-visible" : ""}`}
@@ -1894,7 +1896,7 @@ function App() {
                   </svg>
                 </button>
               )}
-              {!isNow && isUserTab && (
+              {isOwnTab && (
                 <button
                   type="button"
                   className="delete-tab"
@@ -1921,7 +1923,7 @@ function App() {
                 <button
                   ref={tab.id === activeTab.id ? setActiveTabElement : undefined}
                   type="button"
-                  className={tab.id === activeTab.id ? "sheet-tab active" : "sheet-tab"}
+                  className={tabClassName}
                   style={{ visibility: renamingTabId === tab.id ? "hidden" : "visible" }}
                   onClick={() => {
                     setActiveTabId(tab.id);
@@ -1932,7 +1934,7 @@ function App() {
                 </button>
                 {renamingTabId === tab.id && (
                   <input
-                    className={tab.id === activeTab.id ? "sheet-tab tab-name-input active" : "sheet-tab tab-name-input"}
+                    className={`${tabClassName} tab-name-input`}
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", boxSizing: "border-box" }}
                     value={renameDraft}
                     autoFocus
