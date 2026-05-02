@@ -1,6 +1,6 @@
 import type { Layout, LayoutTab } from "./types";
 
-export const NOW_TAB_ID = "tab-default";
+export const NOW_TAB_ID = "now";
 export const NOW_TAB_NAME = "Now";
 
 const EMPTY_LAYOUT: Layout = { unit: "in", tools: [] };

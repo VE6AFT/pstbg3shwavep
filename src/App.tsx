@@ -13,6 +13,7 @@ import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
 import { makeShortId } from "./shortId";
+import { makeTabSlugId } from "./tabSlug";
 import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import { countClientAuthorTabs, isClientAuthorTabLimitReached } from "./tabLimits";
@@ -310,10 +311,6 @@ function inchesToFeetInches(value: number) {
   return `${sign}${feet}' ${inches}"`;
 }
 
-function formatCloneName(id: string) {
-  return id.split("-").at(-1) ?? id;
-}
-
 function normalizeTabName(name: string | null | undefined, fallback: string) {
   const trimmed = name?.trim() ?? "";
   return (trimmed || fallback).slice(0, MAX_TAB_NAME_CHARS);
@@ -443,14 +440,14 @@ function clampViewBox(viewBox: ViewBox): ViewBox {
 }
 
 function cloneLayoutTab(source: LayoutTab, existingTabIds: Iterable<string>): LayoutTab {
-  const nextTabId = makeShortId("tab", existingTabIds);
+  const nextTabId = makeTabSlugId(existingTabIds);
   const now = new Date().toISOString();
   const nextToolIds = new Set(source.layout.tools.map((tool) => tool.id));
 
   return {
     ...source,
     id: nextTabId,
-    name: formatCloneName(nextTabId),
+    name: nextTabId,
     createdAt: now,
     updatedAt: now,
     layout: {

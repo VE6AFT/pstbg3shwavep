@@ -4,7 +4,7 @@ import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-owned",
+    id: "owned",
     name: "Owned Draft",
     layout: { unit: "in", tools: [] },
     ...overrides,
@@ -18,14 +18,14 @@ describe("static Now tab shaping", () => {
 
     expect(withStaticNowTab([userTab, staleNow])).toMatchObject([
       {
-        id: "tab-default",
+        id: "now",
         name: "Now",
         canEdit: false,
         hasLayout: true,
         syncState: "synced",
       },
       {
-        id: "tab-owned",
+        id: "owned",
         name: "Owned Draft",
       },
     ]);

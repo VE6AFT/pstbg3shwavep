@@ -30,7 +30,7 @@ function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-default",
+    id: "now",
     name: "Now",
     authorId: "user-local",
     layout: {
@@ -53,7 +53,7 @@ describe("layout tab validation", () => {
   it("accepts a normal tab and returns canonical data", () => {
     const tab = parseLayoutTabValue(makeTab());
 
-    expect(tab.id).toBe("tab-default");
+    expect(tab.id).toBe("now");
     expect(tab.name).toBe("Now");
     expect(tab.layout.unit).toBe("in");
     expect(tab.layout.tools[0].scope).toBe("wood");
@@ -181,17 +181,17 @@ describe("layout tab validation", () => {
 
   it("supports both direct save and nested clone request shapes", async () => {
     await expect(parseLayoutTabRequest(requestWithJson(makeTab()))).resolves.toMatchObject({
-      id: "tab-default",
+      id: "now",
     });
 
     await expect(parseLayoutTabRequest(requestWithJson({ tab: makeTab() }), { root: "tab" })).resolves.toMatchObject({
-      id: "tab-default",
+      id: "now",
     });
   });
 
   it("can expose editability without leaking author ids", () => {
     const tab = readLayoutTab({
-      id: "tab-owned",
+      id: "owned",
       name: "Owned Draft",
       can_edit: 1,
       layout_json: JSON.stringify(makeTab().layout),

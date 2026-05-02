@@ -62,7 +62,7 @@ export const VALIDATION_LIMITS = {
   requestBytes: 256 * 1024,
   tabIdChars: 32,
   authorIdChars: 128,
-  tabNameChars: 24,
+  tabNameChars: 32,
   toolIdChars: 32,
   toolAssetIdChars: 128,
   toolNameChars: 40,
@@ -76,7 +76,7 @@ export const VALIDATION_LIMITS = {
   hazardsPerTool: 6,
 } as const;
 
-export const STATIC_NOW_TAB_ID = "tab-default";
+export const STATIC_NOW_TAB_ID = "now";
 export const STATIC_NOW_TAB_NAME = "Now";
 export const STATIC_NOW_LAYOUT: Layout = { unit: "in", tools: [] };
 
