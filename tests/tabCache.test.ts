@@ -11,7 +11,7 @@ import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-owned",
+    id: "owned",
     name: "Owned Draft",
     authorId: "user-local",
     canEdit: true,
@@ -44,7 +44,7 @@ describe("tab cache shaping", () => {
     const layout = cachedLayoutForTab(tab);
 
     expect(meta).toMatchObject({
-      id: "tab-owned",
+      id: "owned",
       name: "Owned Draft",
       authorId: "user-local",
       canEdit: true,
@@ -56,7 +56,7 @@ describe("tab cache shaping", () => {
     });
     expect("layout" in meta).toBe(false);
     expect(layout).toEqual({
-      id: "tab-owned",
+      id: "owned",
       updatedAt: "2026-04-30T01:00:00.000Z",
       layout: tab.layout,
     });
@@ -70,7 +70,7 @@ describe("tab cache shaping", () => {
     expect(summary.layout.tools).toEqual([]);
 
     expect(applyCachedLayout(summary, cachedLayoutForTab(tab))).toMatchObject({
-      id: "tab-owned",
+      id: "owned",
       hasLayout: true,
       layout: tab.layout,
     });
@@ -78,7 +78,7 @@ describe("tab cache shaping", () => {
 
   it("defaults older cache metadata to synced", () => {
     const summary = tabFromCachedMeta({
-      id: "tab-old",
+      id: "old",
       name: "Old Cache",
       hasLayout: false,
     });
