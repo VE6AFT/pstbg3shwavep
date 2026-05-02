@@ -301,7 +301,8 @@ button {
 .floorplan-controls [data-tooltip]:focus-visible::after,
 .floorplan-controls label[data-tooltip]:has(input:focus-visible)::after,
 .diskette-status[data-tooltip]:hover::before,
-.diskette-status[data-tooltip]:focus-visible::before {
+.diskette-status[data-tooltip]:focus-visible::before,
+.diskette-status[data-tooltip].persistent-tooltip::before {
   opacity: 1;
   transform: translateY(-50%);
 }

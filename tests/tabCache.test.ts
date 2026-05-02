@@ -48,8 +48,6 @@ describe("tab cache shaping", () => {
       name: "Owned Draft",
       authorId: "user-local",
       canEdit: true,
-      hasLayout: true,
-      layoutUpdatedAt: "2026-04-30T01:00:00.000Z",
       syncState: "dirty",
       dirtyAt: "2026-04-30T01:30:00.000Z",
       syncError: "offline",
@@ -76,11 +74,10 @@ describe("tab cache shaping", () => {
     });
   });
 
-  it("defaults older cache metadata to synced", () => {
+  it("defaults cached metadata to synced", () => {
     const summary = tabFromCachedMeta({
-      id: "old",
-      name: "Old Cache",
-      hasLayout: false,
+      id: "cached",
+      name: "Cached Tab",
     });
 
     expect(summary.syncState).toBe("synced");
