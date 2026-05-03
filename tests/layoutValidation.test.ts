@@ -15,7 +15,6 @@ import { onRequestDelete, onRequestPut } from "../functions/api/tabs/[id]";
 function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
   return {
     id: "tool-saw",
-    assetId: "asset-table-saw",
     name: "Table Saw",
     x: 10,
     y: 20,
@@ -23,7 +22,7 @@ function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
     height: 60,
     rotation: 0,
     color: "#db6b4d",
-    scope: "wood",
+    activity: "wood",
     hazards: ["dust", "noise"],
     ...overrides,
   };
@@ -31,11 +30,9 @@ function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-default",
+    id: "now",
     name: "Now",
     authorId: "user-local",
-    clonedFromId: null,
-    clonedFromName: null,
     layout: {
       unit: "in",
       tools: [makeTool()],
@@ -121,10 +118,10 @@ describe("layout tab validation", () => {
   it("accepts a normal tab and returns canonical data", () => {
     const tab = parseLayoutTabValue(makeTab());
 
-    expect(tab.id).toBe("tab-default");
+    expect(tab.id).toBe("now");
     expect(tab.name).toBe("Now");
     expect(tab.layout.unit).toBe("in");
-    expect(tab.layout.tools[0].scope).toBe("wood");
+    expect(tab.layout.tools[0].activity).toBe("wood");
     expect(tab.layout.tools[0].hazards).toEqual(["dust", "noise"]);
   });
 
@@ -157,6 +154,32 @@ describe("layout tab validation", () => {
 
     expect(parseLayoutTabValue(makeTab({ name: maxName })).name).toBe(maxName);
     expect(() => parseLayoutTabValue(makeTab({ name: `${maxName}a` }))).toThrow(ValidationError);
+  });
+
+  it("limits generated tab and tool ids to compact shared maximums", () => {
+    const maxTabId = "t".repeat(VALIDATION_LIMITS.tabIdChars);
+    const maxToolId = "x".repeat(VALIDATION_LIMITS.toolIdChars);
+
+    expect(parseLayoutTabValue(makeTab({
+      id: maxTabId,
+      layout: {
+        unit: "in",
+        tools: [makeTool({ id: maxToolId })],
+      },
+    }))).toMatchObject({
+      id: maxTabId,
+      layout: {
+        tools: [{ id: maxToolId }],
+      },
+    });
+
+    expect(() => parseLayoutTabValue(makeTab({ id: `${maxTabId}a` }))).toThrow(ValidationError);
+    expect(() => parseLayoutTabValue(makeTab({
+      layout: {
+        unit: "in",
+        tools: [makeTool({ id: `${maxToolId}a` })],
+      },
+    }))).toThrow(ValidationError);
   });
 
   it("limits tool names and sizes to the shared maximums", () => {
@@ -199,7 +222,7 @@ describe("layout tab validation", () => {
     });
   });
 
-  it("rejects invalid ids, names, numbers, colors, scopes, and hazards", () => {
+  it("rejects invalid ids, names, numbers, colors, activities, and hazards", () => {
     expect(() =>
       parseLayoutTabValue(
         makeTab({
@@ -211,7 +234,7 @@ describe("layout tab validation", () => {
               makeTool({
                 color: "tomato",
                 rotation: Infinity,
-                scope: "not-a-scope" as ToolShape["scope"],
+                activity: "not-an-activity" as ToolShape["activity"],
                 hazards: ["dust", "dust", "lava" as NonNullable<ToolShape["hazards"]>[number]],
               }),
             ],
@@ -223,21 +246,19 @@ describe("layout tab validation", () => {
 
   it("supports both direct save and nested clone request shapes", async () => {
     await expect(parseLayoutTabRequest(requestWithJson(makeTab()))).resolves.toMatchObject({
-      id: "tab-default",
+      id: "now",
     });
 
     await expect(parseLayoutTabRequest(requestWithJson({ tab: makeTab() }), { root: "tab" })).resolves.toMatchObject({
-      id: "tab-default",
+      id: "now",
     });
   });
 
   it("can expose editability without leaking author ids", () => {
     const tab = readLayoutTab({
-      id: "tab-owned",
+      id: "owned",
       name: "Owned Draft",
       can_edit: 1,
-      cloned_from_tab_id: null,
-      cloned_from_tab_name: null,
       layout_json: JSON.stringify(makeTab().layout),
       created_at: "2026-04-30T00:00:00.000Z",
       updated_at: "2026-04-30T00:00:00.000Z",

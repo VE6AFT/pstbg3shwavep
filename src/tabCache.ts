@@ -12,15 +12,11 @@ export type CachedTabMeta = {
   name: string;
   authorId?: string | null;
   canEdit?: boolean;
-  hasLayout: boolean;
-  clonedFromId?: string | null;
-  clonedFromName?: string | null;
   syncState?: SyncState;
   dirtyAt?: string;
   syncError?: string;
   createdAt?: string;
   updatedAt?: string;
-  layoutUpdatedAt?: string | null;
 };
 
 export type CachedTabLayout = {
@@ -31,22 +27,16 @@ export type CachedTabLayout = {
 };
 
 export function toCachedTabMeta(tab: LayoutTab): CachedTabMeta {
-  const hasLayout = tab.hasLayout !== false;
-
   return {
     id: tab.id,
     name: tab.name,
     ...(tab.authorId !== undefined ? { authorId: tab.authorId } : {}),
     ...(tab.canEdit !== undefined ? { canEdit: tab.canEdit } : {}),
-    hasLayout,
-    clonedFromId: tab.clonedFromId ?? null,
-    clonedFromName: tab.clonedFromName ?? null,
     syncState: tab.syncState ?? "synced",
     ...(tab.dirtyAt ? { dirtyAt: tab.dirtyAt } : {}),
     ...(tab.syncError ? { syncError: tab.syncError } : {}),
     ...(tab.createdAt ? { createdAt: tab.createdAt } : {}),
     ...(tab.updatedAt ? { updatedAt: tab.updatedAt } : {}),
-    layoutUpdatedAt: hasLayout ? tab.updatedAt ?? null : null,
   };
 }
 
@@ -57,8 +47,6 @@ export function tabFromCachedMeta(meta: CachedTabMeta): LayoutTab {
     ...(meta.authorId !== undefined ? { authorId: meta.authorId } : {}),
     ...(meta.canEdit !== undefined ? { canEdit: meta.canEdit } : {}),
     hasLayout: false,
-    clonedFromId: meta.clonedFromId ?? null,
-    clonedFromName: meta.clonedFromName ?? null,
     syncState: meta.syncState ?? "synced",
     ...(meta.dirtyAt ? { dirtyAt: meta.dirtyAt } : {}),
     ...(meta.syncError ? { syncError: meta.syncError } : {}),

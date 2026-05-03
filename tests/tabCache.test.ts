@@ -12,18 +12,15 @@ import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-owned",
+    id: "owned",
     name: "Owned Draft",
     authorId: "user-local",
     canEdit: true,
-    clonedFromId: "tab-default",
-    clonedFromName: "Now",
     layout: {
       unit: "in",
       tools: [
         {
           id: "tool-saw",
-          assetId: "asset-table-saw",
           name: "Table Saw",
           x: 10,
           y: 20,
@@ -47,21 +44,17 @@ describe("tab cache shaping", () => {
     const layout = cachedLayoutForTab(tab);
 
     expect(meta).toMatchObject({
-      id: "tab-owned",
+      id: "owned",
       name: "Owned Draft",
       authorId: "user-local",
       canEdit: true,
-      clonedFromId: "tab-default",
-      clonedFromName: "Now",
-      hasLayout: true,
-      layoutUpdatedAt: "2026-04-30T01:00:00.000Z",
       syncState: "dirty",
       dirtyAt: "2026-04-30T01:30:00.000Z",
       syncError: "offline",
     });
     expect("layout" in meta).toBe(false);
     expect(layout).toEqual({
-      id: "tab-owned",
+      id: "owned",
       updatedAt: "2026-04-30T01:00:00.000Z",
       dirtyAt: "2026-04-30T01:30:00.000Z",
       layout: tab.layout,
@@ -76,19 +69,16 @@ describe("tab cache shaping", () => {
     expect(summary.layout.tools).toEqual([]);
 
     expect(applyCachedLayout(summary, cachedLayoutForTab(tab))).toMatchObject({
-      id: "tab-owned",
+      id: "owned",
       hasLayout: true,
       layout: tab.layout,
     });
   });
 
-  it("defaults older cache metadata to synced", () => {
+  it("defaults cached metadata to synced", () => {
     const summary = tabFromCachedMeta({
-      id: "tab-old",
-      name: "Old Cache",
-      hasLayout: false,
-      clonedFromId: null,
-      clonedFromName: null,
+      id: "cached",
+      name: "Cached Tab",
     });
 
     expect(summary.syncState).toBe("synced");

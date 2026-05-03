@@ -4,18 +4,15 @@ import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-owned",
+    id: "owned",
     name: "Owned Draft",
     canEdit: true,
-    clonedFromId: "tab-default",
-    clonedFromName: "Now",
     hasLayout: true,
     layout: {
       unit: "in",
       tools: [
         {
           id: "tool-saw",
-          assetId: "asset-table-saw",
           name: "Table Saw",
           x: 10,
           y: 20,
@@ -48,7 +45,7 @@ describe("remote/local tab sync merge", () => {
 
     expect(mergeRemoteTabSummaries([remote], [local])).toMatchObject([
       {
-        id: "tab-owned",
+        id: "owned",
         name: "Remote New",
         hasLayout: false,
         syncState: "synced",
@@ -57,9 +54,9 @@ describe("remote/local tab sync merge", () => {
   });
 
   it("preserves local-only offline clones that are absent remotely", () => {
-    const remote = makeSummary({ id: "tab-default", name: "Now" });
+    const remote = makeSummary({ id: "now", name: "Now" });
     const localOnly = makeTab({
-      id: "tab-local",
+      id: "local",
       name: "Offline Clone",
       syncState: "local-only",
       dirtyAt: "2026-04-30T03:00:00.000Z",
@@ -69,9 +66,9 @@ describe("remote/local tab sync merge", () => {
   });
 
   it("preserves draft clones without making them flushable", () => {
-    const remote = makeSummary({ id: "tab-default", name: "Now" });
+    const remote = makeSummary({ id: "now", name: "Now" });
     const draftClone = makeTab({
-      id: "tab-draft",
+      id: "draft",
       name: "Renamed Local Draft",
       syncState: "draft-clone",
       dirtyAt: "2026-04-30T03:00:00.000Z",
@@ -137,7 +134,7 @@ describe("remote/local tab sync merge", () => {
     const remote = makeSummary({ updatedAt: "2026-04-30T04:00:00.000Z" });
 
     expect(mergeRemoteTabSummaries([remote], [local])[0]).toMatchObject({
-      id: "tab-owned",
+      id: "owned",
       syncState: "delete-pending",
     });
   });
