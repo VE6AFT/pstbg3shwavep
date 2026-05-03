@@ -30,8 +30,6 @@ function existingTab(id: string, row: ExistingTabRow): LayoutTab {
     name: row.name,
     author_id: row.author_id,
     can_edit: true,
-    cloned_from_tab_id: null,
-    cloned_from_tab_name: null,
     layout_json: row.layout_json,
     created_at: row.created_at,
     updated_at: row.updated_at,

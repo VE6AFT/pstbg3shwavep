@@ -998,8 +998,6 @@ function App() {
                   createdAt: tab.createdAt ?? item.createdAt,
                   updatedAt: tab.updatedAt ?? item.updatedAt,
                   canEdit: tab.canEdit ?? item.canEdit,
-                  clonedFromId: tab.clonedFromId ?? item.clonedFromId,
-                  clonedFromName: tab.clonedFromName ?? item.clonedFromName,
                 };
               }
               return withSyncedState(normalizeTab(tab));
