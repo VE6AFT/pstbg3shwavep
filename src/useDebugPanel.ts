@@ -56,6 +56,15 @@ export function useDebugPanel() {
   }, []);
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      toggleFromKey(event.key);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleFromKey]);
+
+  useEffect(() => {
     if (!logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [events]);
