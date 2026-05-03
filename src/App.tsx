@@ -1212,6 +1212,7 @@ function App() {
   }, [activeTabId, tabs.length]);
 
   const startToolDrag = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
     event.stopPropagation();
     if (!canEdit) {
       triggerClonePrompt();
@@ -1373,6 +1374,7 @@ function App() {
   };
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    event.preventDefault();
     const isToolTarget = event.target instanceof Element && Boolean(event.target.closest(".tool-node"));
     if (isToolTarget) {
       if (shouldPromptForClone) triggerClonePrompt();
@@ -1926,6 +1928,7 @@ function App() {
           onPointerMove={moveToolDrag}
           onPointerUp={endToolDrag}
           onPointerCancel={endToolDrag}
+          onDragStart={(event) => event.preventDefault()}
           onContextMenu={(e) => e.preventDefault()}
         >
           <defs>

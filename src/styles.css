@@ -619,7 +619,17 @@ button {
   background: #fbfaf6;
   box-shadow: none;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
   cursor: grab;
+}
+
+.floorplan *,
+.floorplan text {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 .floorplan.panning {
@@ -665,6 +675,8 @@ button {
   cursor: grab;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
   transition: opacity 100ms ease;
 }
 
