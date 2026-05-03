@@ -149,10 +149,71 @@ function parseSvgDocument(markup: string) {
   return document;
 }
 
+function normalizeLayerLabel(value: string | null) {
+  return value?.trim().toLowerCase();
+}
+
+function removeInlineDisplay(element: Element) {
+  const style = element.getAttribute("style");
+  if (!style) return;
+
+  const nextStyle = style
+    .split(";")
+    .map((declaration) => declaration.trim())
+    .filter((declaration) => declaration && !declaration.toLowerCase().startsWith("display:"))
+    .join(";");
+
+  if (nextStyle) element.setAttribute("style", nextStyle);
+  else element.removeAttribute("style");
+}
+
 function isToolLayer(element: Element) {
   return element.id === "layer-tools"
-    || element.getAttribute("inkscape:label") === "tools"
+    || normalizeLayerLabel(element.getAttribute("inkscape:label")) === "tools"
     || element.getAttribute("data-layer") === "tools";
+}
+
+function normalizeStaticSvgLayers(document: Document) {
+  Array.from(document.querySelectorAll("g")).forEach((element) => {
+    const layer = normalizeLayerLabel(element.getAttribute("inkscape:label") ?? element.getAttribute("data-layer"));
+    if (layer === "mezzanine") {
+      element.classList.add("mezzanine-layer");
+      element.setAttribute("data-layer", "mezzanine");
+      removeInlineDisplay(element);
+    }
+    if (layer === "infrastructure" || layer === "infra") {
+      element.classList.add("infra-layer");
+      element.setAttribute("data-layer", "infrastructure");
+      removeInlineDisplay(element);
+    }
+  });
+}
+
+function removeExportedLayerVisibilityStyles(document: Document) {
+  Array.from(document.querySelectorAll("style")).forEach((element) => {
+    const text = element.textContent;
+    if (!text || !/\.infra-layer|\.mezzanine-layer/.test(text)) return;
+
+    const nextText = text
+      .replace(/\.infra-layer\s*\{\s*display\s*:\s*(?:block|none)\s*\}/gi, "")
+      .replace(/\.mezzanine-layer\s*\{\s*display\s*:\s*(?:block|none)\s*\}/gi, "")
+      .trim();
+
+    if (nextText) element.textContent = nextText;
+    else element.remove();
+  });
+}
+
+function normalizeStaticSvgDocument(document: Document) {
+  removeExportedLayerVisibilityStyles(document);
+  normalizeStaticSvgLayers(document);
+}
+
+function serializeSvgBody(document: Document) {
+  return Array.from(document.documentElement.childNodes)
+    .map((node) => new XMLSerializer().serializeToString(node))
+    .join("\n")
+    .trim();
 }
 
 function staticToolLayers(document: Document) {
@@ -238,15 +299,21 @@ function stripStaticToolLayers(markup: string) {
   const document = parseSvgDocument(markup);
   if (!document || typeof XMLSerializer === "undefined") return extractSvgBody(markup);
 
+  normalizeStaticSvgDocument(document);
   staticToolLayers(document).forEach((layer) => layer.remove());
-  return Array.from(document.documentElement.childNodes)
-    .map((node) => new XMLSerializer().serializeToString(node))
-    .join("\n")
-    .trim();
+  return serializeSvgBody(document);
+}
+
+function normalizeStaticSvgMarkup(markup: string) {
+  const document = parseSvgDocument(markup);
+  if (!document || typeof XMLSerializer === "undefined") return extractSvgBody(markup);
+
+  normalizeStaticSvgDocument(document);
+  return serializeSvgBody(document);
 }
 
 const NOW_VIEWBOX = parseSvgViewBox(nowSvg);
-const NOW_MARKUP = extractSvgBody(nowSvg);
+const NOW_MARKUP = normalizeStaticSvgMarkup(nowSvg);
 const NOW_GEOMETRY_MARKUP = stripStaticToolLayers(nowSvg);
 const STATIC_NOW_TAB = makeStaticNowTab({
   unit: "in",
