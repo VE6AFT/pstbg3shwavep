@@ -70,8 +70,6 @@ export function mergeRemoteTabSummaries(remoteTabs: LayoutTab[], currentTabs: La
         ...(current.syncState === "local-only" && remote.createdAt ? { createdAt: remote.createdAt } : {}),
         ...(current.syncState === "local-only" && remote.updatedAt ? { updatedAt: remote.updatedAt } : {}),
         ...(remote.canEdit !== undefined ? { canEdit: remote.canEdit } : {}),
-        ...(remote.clonedFromId !== undefined ? { clonedFromId: remote.clonedFromId } : {}),
-        ...(remote.clonedFromName !== undefined ? { clonedFromName: remote.clonedFromName } : {}),
       };
     }
 
