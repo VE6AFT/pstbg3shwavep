@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" viewBox="-384 0 1572 1164">
+  <g id="layer-building" aria-label="Building geometry layer" inkscape:label="building" inkscape:groupmode="layer">
+    <g id="bay-105" inkscape:label="bay 105">
+      <rect x="0" y="0" width="1188" height="444" rx="2" fill="#ffffff" stroke="#30383a" stroke-width="2" />
+      <text x="1212" y="44" fill="#252b2d" font-size="34" font-weight="850" font-family="sans-serif">105</text>
+      <text x="24" y="422" fill="#697074" font-size="18" font-weight="700" font-family="sans-serif">99' 0&quot; x 37' 0&quot;</text>
+    </g>
+    <g id="bay-108" inkscape:label="bay 108">
+      <rect x="0" y="516" width="1164" height="324" rx="2" fill="#ffffff" stroke="#30383a" stroke-width="2" />
+      <text x="1188" y="560" fill="#252b2d" font-size="34" font-weight="850" font-family="sans-serif">108</text>
+      <text x="24" y="818" fill="#697074" font-size="18" font-weight="700" font-family="sans-serif">97' 0&quot; x 27' 0&quot;</text>
+    </g>
+    <g id="bay-110" inkscape:label="bay 110">
+      <rect x="0" y="840" width="1164" height="324" rx="2" fill="#ffffff" stroke="#30383a" stroke-width="2" />
+      <text x="1188" y="884" fill="#252b2d" font-size="34" font-weight="850" font-family="sans-serif">110</text>
+      <text x="24" y="1142" fill="#697074" font-size="18" font-weight="700" font-family="sans-serif">97' 0&quot; x 27' 0&quot;</text>
+    </g>
+  </g>
+
+  <g id="layer-infra" class="infra-layer" aria-label="Infrastructure layer" inkscape:label="infrastructure" inkscape:groupmode="layer">
+    <path id="infra-electrical" class="infra electrical" d="M -96 180 H 1120" fill="none" stroke="#3d6fd4" stroke-width="2" stroke-dasharray="8 4" stroke-linecap="round" />
+    <path id="infra-gas" class="infra gas" d="M 160 -60 V 1120" fill="none" stroke="#e87c2a" stroke-width="2" stroke-dasharray="12 4" stroke-linecap="round" />
+    <path id="infra-dust" class="infra dust" d="M 660 -48 V 1100 M 520 240 H 1030" fill="none" stroke="#a0522d" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" />
+    <circle id="infra-node-electrical" class="infra-node electrical" cx="190" cy="180" r="10" fill="#3d6fd4" stroke="none" />
+    <circle id="infra-node-gas" class="infra-node gas" cx="160" cy="520" r="10" fill="#e87c2a" stroke="none" />
+    <circle id="infra-node-dust" class="infra-node dust" cx="660" cy="240" r="10" fill="#a0522d" stroke="none" />
+  </g>
+
+  <g id="layer-mezzanine" class="mezzanine-layer" aria-label="Mezzanine layer" inkscape:label="mezzanine" inkscape:groupmode="layer">
+    <g id="mezz-bay-105" transform="translate(-384 42)" inkscape:label="mezzanine 105">
+      <rect width="360" height="360" fill="#ffffff" stroke="#30383a" stroke-width="2" rx="2" />
+      <path d="M 0 0 L 360 360 M 360 0 L 0 360" stroke="#30383a" stroke-width="1" opacity="0.6" />
+      <text x="180" y="180" dominant-baseline="middle" text-anchor="middle" fill="#252b2d" font-size="24" font-weight="800" style="pointer-events:none;user-select:none">MEZZ</text>
+    </g>
+    <g id="mezz-bay-108" transform="translate(-384 498)" inkscape:label="mezzanine 108">
+      <rect width="360" height="360" fill="#ffffff" stroke="#30383a" stroke-width="2" rx="2" />
+      <path d="M 0 0 L 360 360 M 360 0 L 0 360" stroke="#30383a" stroke-width="1" opacity="0.6" />
+      <text x="180" y="180" dominant-baseline="middle" text-anchor="middle" fill="#252b2d" font-size="24" font-weight="800" style="pointer-events:none;user-select:none">MEZZ</text>
+    </g>
+    <g id="mezz-bay-110" transform="translate(-384 822)" inkscape:label="mezzanine 110">
+      <rect width="360" height="360" fill="#ffffff" stroke="#30383a" stroke-width="2" rx="2" />
+      <path d="M 0 0 L 360 360 M 360 0 L 0 360" stroke="#30383a" stroke-width="1" opacity="0.6" />
+      <text x="180" y="180" dominant-baseline="middle" text-anchor="middle" fill="#252b2d" font-size="24" font-weight="800" style="pointer-events:none;user-select:none">MEZZ</text>
+    </g>
+  </g>
+</svg>

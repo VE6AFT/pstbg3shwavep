@@ -1,6 +1,5 @@
 export type ToolShape = {
   id: string;
-  assetId: string;
   name: string;
   x: number;
   y: number;
@@ -8,7 +7,7 @@ export type ToolShape = {
   height: number;
   rotation: number;
   color: string;
-  scope?:
+  activity?:
     | "undefined"
     | "automotive"
     | "blue"
@@ -22,6 +21,7 @@ export type ToolShape = {
     | "red"
     | "social"
     | "software/it"
+    | "storage"
     | "textiles/leather"
     | "training"
     | "wood";
@@ -39,8 +39,6 @@ export type LayoutTab = {
   authorId?: string | null;
   canEdit?: boolean;
   hasLayout?: boolean;
-  clonedFromId?: string | null;
-  clonedFromName?: string | null;
   syncState?: SyncState;
   dirtyAt?: string;
   syncError?: string;
