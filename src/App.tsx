@@ -38,9 +38,8 @@ const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
 const TAB_DELETE_CONFIRM_MS = 2200;
-const TUTORIAL_STEP_MS = 5000;
+
 const SHARE_FEEDBACK_MS = 1800;
-const TUTORIAL_STEPS = ["zoom", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
 const DIMS_MODES = ["off", "selected", "all"] as const;
 const ROTATION_SNAP_DEGREES = 5;
@@ -141,7 +140,7 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
-type TutorialStep = typeof TUTORIAL_STEPS[number];
+type TutorialStep = "overview";
 type SnapMode = typeof SNAP_MODES[number];
 type DimsMode = typeof DIMS_MODES[number];
 type ShareStatus = "idle" | "copied" | "failed";
@@ -901,6 +900,7 @@ function App() {
   const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
+  const isTutorialActive = tutorialStep !== null;
   const canOfferClone = !tabCreationLimitMessage && !isClientAuthorTabLimitReached(tabs, localUserId);
   const canShareActiveTab = isShareableTab(activeTab);
   const shareTooltip = !canShareActiveTab
@@ -972,9 +972,9 @@ function App() {
   const paintDeleteZone = useCallback((level: number) => {
     const clampedLevel = clamp(level, 0, 1);
     deleteProximityRef.current = clampedLevel;
-    const visibleLevel = Math.max(clampedLevel, tutorialStep === "delete" ? 1 : 0);
+    const visibleLevel = Math.max(clampedLevel, isTutorialActive ? 1 : 0);
     paintActionZone(deleteZoneRef.current, visibleLevel, clampedLevel === 1);
-  }, [paintActionZone, tutorialStep]);
+  }, [isTutorialActive, paintActionZone]);
 
   const paintCopyZone = useCallback((level: number) => {
     const clampedLevel = clamp(level, 0, 1);
@@ -1152,26 +1152,7 @@ function App() {
 
   useEffect(() => {
     if (!tutorialStep) return;
-
-    if (tutorialStep === "add") {
-      setShowAddTool(true);
-    }
-
-    const timer = window.setTimeout(() => {
-      const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
-      const nextStep = TUTORIAL_STEPS[currentIndex + 1] ?? null;
-
-      if (nextStep === "add") {
-        setShowAddTool(true);
-      }
-      if (tutorialStep === "add") {
-        setShowAddTool(false);
-      }
-
-      setTutorialStep(nextStep);
-    }, TUTORIAL_STEP_MS);
-
-    return () => window.clearTimeout(timer);
+    setShowAddTool(true);
   }, [tutorialStep]);
 
   useEffect(() => {
@@ -1810,7 +1791,7 @@ function App() {
     pushDebugEvent("clone draft created");
 
     if (!localStorage.getItem("pstbg3shwavep-tutorial-seen")) {
-      setTutorialStep("zoom");
+      setTutorialStep("overview");
       localStorage.setItem("pstbg3shwavep-tutorial-seen", "true");
     }
   };
@@ -2085,10 +2066,10 @@ function App() {
             <div className="floorplan-controls" aria-label="Floorplan controls">
               <button
                 type="button"
-                className={tutorialStep === "add" ? "tutorial-highlight" : ""}
+                className={isTutorialActive ? "tutorial-highlight" : ""}
                 onClick={() => {
                   if (!canEdit) return;
-                  setShowAddTool((current) => (tutorialStep === "add" ? true : !current));
+                  setShowAddTool((current) => (isTutorialActive ? true : !current));
                 }}
                 disabled={!canEdit}
               >
@@ -2142,7 +2123,7 @@ function App() {
             </div>
           </div>
           {showAddTool && canEdit && (
-            <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
+            <form className={`add-tool-form ${isTutorialActive ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
                 <input
@@ -2240,6 +2221,7 @@ function App() {
           className={[
             "floorplan",
             isPanning ? "panning" : "",
+            isTutorialActive ? "tutorial-zooming" : "",
             gridDark ? "grid-dark" : "",
             showInfra ? "show-infra" : "",
             showMezz ? "show-mezz" : "",
@@ -2443,7 +2425,7 @@ function App() {
           <>
             <div
               ref={deleteZoneRef}
-              className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
+              className={`delete-zone ${isTutorialActive ? "tutorial-pulse" : ""}`}
               aria-label="Drop here to delete"
             >
               <svg viewBox="0 0 24 24">
@@ -2456,7 +2438,7 @@ function App() {
             </div>
             <div
               ref={copyZoneRef}
-              className="delete-zone copy-zone"
+              className={`delete-zone copy-zone ${isTutorialActive ? "tutorial-pulse" : ""}`}
               aria-label="Drop here to copy"
             >
               <svg viewBox="0 0 24 24">
@@ -2476,7 +2458,7 @@ function App() {
           const isOwnTab = !isNow && isUserTab;
           const tabClassName = `sheet-tab${isActive ? " active" : ""}`;
           const isConfirmingDelete = confirmingDeleteTabId === tab.id;
-          const isRenameStep = tutorialStep === "rename" && isActive;
+          const isRenameStep = isTutorialActive && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
           return (
@@ -2558,76 +2540,35 @@ function App() {
       </nav>
 
       {tutorialStep && (
-        <div className="tutorial-overlay">
-          <div className="tutorial-tip">
-            {tutorialStep === "zoom" && (
-              <>
-                <div className="tutorial-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="11" cy="11" r="8" />
-                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                    <line x1="8" y1="11" x2="14" y2="11" />
-                    <line x1="11" y1="8" x2="11" y2="14" />
-                  </svg>
-                </div>
-                <h3>Scroll to zoom</h3>
-                <p>Use your mouse wheel to zoom in and out of the drawing.</p>
-              </>
-            )}
-            {tutorialStep === "delete" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "#ef4444" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 6h18" />
-                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
-                </div>
-                <h3>Drag to delete</h3>
-                <p>Drag any object onto the garbage can at the bottom to remove it.</p>
-              </>
-            )}
-            {tutorialStep === "add" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "var(--accent)" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                </div>
-                <h3>Add new tools</h3>
-                <p>Bring up the Add panel to spawn new equipment.</p>
-              </>
-            )}
-            {tutorialStep === "rename" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "var(--accent)" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M4 20h4l11-11-4-4L4 16v4Z" />
-                    <path d="m13 7 4 4" />
-                  </svg>
-                </div>
-                <h3>Rename this tab and create your Protospace!</h3>
-              </>
-            )}
-            <div className="tutorial-progress-wrap">
-              <div className="tutorial-progress-bar continuous" />
-              <div className="tutorial-markers" style={{ position: "relative", height: "8px" }}>
-                {TUTORIAL_STEPS.map((step, i) => {
-                  const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
-                  const lastIndex = TUTORIAL_STEPS.length - 1;
-                  const leftPercent = lastIndex === 0 ? 0 : (lastIndex - i) * (100 / lastIndex);
-                  return (
-                    <div
-                      key={step}
-                      className={`tutorial-marker ${i >= currentIndex ? "filled" : ""}`}
-                      style={{ position: "absolute", left: `${leftPercent}%`, transform: "translateX(-50%)" }}
-                      title={step}
-                    />
-                  );
-                })}
+        <div className="tutorial-overlay" onClick={() => { setTutorialStep(null); setShowAddTool(false); }}>
+          <div className="tutorial-tip scroll-tip">
+            <div className="tutorial-zoom-callout" aria-hidden="true">
+              <div className="tutorial-mouse">
+                <span />
+              </div>
+              <div className="tutorial-zoom-rings">
+                <span />
+                <span />
               </div>
             </div>
+            <strong>Scroll</strong>
+            <span>zoom the floorplan</span>
+            <p className="tutorial-dismiss-hint">Click anywhere to dismiss</p>
+          </div>
+
+          <div className="tutorial-tip add-tip">
+            <strong>Add</strong>
+            <span>spawn equipment from the panel</span>
+          </div>
+
+          <div className="tutorial-tip drop-tip">
+            <strong>Drop</strong>
+            <span>delete or copy with targets</span>
+          </div>
+
+          <div className="tutorial-tip rename-tip">
+            <strong>Rename</strong>
+            <span>label your new tab</span>
           </div>
         </div>
       )}

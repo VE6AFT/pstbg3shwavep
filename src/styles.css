@@ -543,6 +543,8 @@ button {
   --delete-zone-level: 0;
   --delete-zone-opacity: 0.15;
   --delete-zone-active: #ef4444;
+  --delete-zone-pulse-shadow: rgba(239, 68, 68, 0.42);
+  --delete-zone-pulse-fade: rgba(239, 68, 68, 0);
   position: absolute;
   bottom: 20px;
   left: calc(50% - 72px);
@@ -564,6 +566,8 @@ button {
 
 .delete-zone.copy-zone {
   --delete-zone-active: var(--accent);
+  --delete-zone-pulse-shadow: rgba(34, 113, 129, 0.42);
+  --delete-zone-pulse-fade: rgba(34, 113, 129, 0);
   left: calc(50% + 72px);
 }
 
@@ -1099,6 +1103,7 @@ button {
 }
 
 .delete-zone.tutorial-pulse {
+  --delete-zone-level: 1;
   animation: delete-pulse 1s ease-in-out infinite;
   opacity: 1 !important;
 }
@@ -1108,29 +1113,12 @@ button {
   0%,
   100% {
     transform: var(--delete-zone-center) scale(1);
-    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0.4);
+    box-shadow: 0 0 0 0 var(--delete-zone-pulse-shadow);
   }
 
   50% {
     transform: var(--delete-zone-center) scale(1.3);
-    box-shadow: 0 0 20px 10px rgba(159, 64, 59, 0);
-  }
-}
-
-.add-tool-form.tutorial-glow {
-  animation: form-glow 2s ease-in-out infinite;
-  border: 2px solid var(--accent);
-}
-
-@keyframes form-glow {
-
-  0%,
-  100% {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  }
-
-  50% {
-    box-shadow: 0 0 25px 5px rgba(34, 113, 129, 0.3);
+    box-shadow: 0 0 20px 10px var(--delete-zone-pulse-fade);
   }
 }
 
@@ -1138,26 +1126,81 @@ button {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  pointer-events: none;
+  pointer-events: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding: 18px;
+  cursor: pointer;
 }
 
 .tutorial-tip {
+  position: absolute;
   pointer-events: auto;
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  padding: 12px 18px;
+  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.2);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  max-width: 320px;
+  gap: 6px;
+  width: auto;
+  min-width: 160px;
   text-align: center;
   animation: tip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.scroll-tip {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 24px 30px;
+  min-width: 240px;
+}
+
+.add-tip,
+.drop-tip,
+.rename-tip {
+  animation: 
+    tip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    tip-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tip-pulse {
+  0%, 100% {
+    box-shadow: 0 15px 45px rgba(0, 0, 0, 0.2), 0 0 0 0px rgba(34, 113, 129, 0);
+    border-color: var(--line);
+  }
+  50% {
+    box-shadow: 0 15px 45px rgba(0, 0, 0, 0.2), 0 0 0 6px rgba(34, 113, 129, 0.25);
+    border-color: var(--accent);
+  }
+}
+
+.add-tip {
+  bottom: 320px;
+  left: 180px;
+}
+
+.drop-tip {
+  bottom: 180px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.rename-tip {
+  bottom: 65px;
+  left: 320px;
+}
+
+@media (max-width: 800px) {
+  .rename-tip {
+    left: auto;
+    right: 20px;
+    transform: none;
+  }
 }
 
 @keyframes tip-in {
@@ -1178,20 +1221,6 @@ button {
   color: var(--accent);
 }
 
-.tutorial-tip p {
-  margin: 0;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  color: #4b5563;
-}
-
-.tutorial-icon {
-  width: 64px;
-  height: 64px;
-  color: var(--accent);
-  margin-bottom: 8px;
-}
-
 .tutorial-highlight {
   outline: 3px solid var(--accent);
   outline-offset: 4px;
@@ -1210,47 +1239,120 @@ button {
   }
 }
 
-.tutorial-progress-wrap {
-  margin-top: 16px;
-  width: 100%;
+.floorplan.tutorial-zooming {
+  transform-origin: center center;
+  animation: floorplan-zoom-demo 2.8s ease-in-out infinite;
 }
 
-.tutorial-progress-bar {
-  height: 4px;
-  background: var(--accent);
-  width: 100%;
-  transform-origin: left;
-  animation: tutorial-total-timer 20s linear forwards;
+@keyframes floorplan-zoom-demo {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.025);
+  }
+
+  70% {
+    transform: scale(0.992);
+  }
 }
 
-@keyframes tutorial-total-timer {
+.tutorial-zoom-callout {
+  position: relative;
+  width: 70px;
+  height: 48px;
+  color: var(--accent);
+}
+
+.tutorial-mouse {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 26px;
+  height: 40px;
+  border: 2px solid currentColor;
+  border-radius: 14px;
+  transform: translateX(-50%);
+  background: #ffffff;
+}
+
+.tutorial-mouse span {
+  position: absolute;
+  left: 50%;
+  top: 7px;
+  width: 4px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%);
+  animation: tutorial-wheel 1.4s ease-in-out infinite;
+}
+
+.tutorial-zoom-rings span {
+  position: absolute;
+  inset: 8px 18px 0;
+  border: 2px solid rgba(34, 113, 129, 0.28);
+  border-radius: 999px;
+  animation: tutorial-ring 2.8s ease-out infinite;
+}
+
+.tutorial-zoom-rings span:nth-child(2) {
+  animation-delay: 1.4s;
+}
+
+@keyframes tutorial-wheel {
+
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+    opacity: 0.95;
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(12px);
+    opacity: 0.45;
+  }
+}
+
+@keyframes tutorial-ring {
   from {
-    transform: scaleX(1);
+    transform: scale(0.72);
+    opacity: 0.6;
   }
 
   to {
-    transform: scaleX(0);
+    transform: scale(1.7);
+    opacity: 0;
   }
 }
 
-.tutorial-markers {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 6px;
-  padding: 0 4px;
+.tutorial-tip strong {
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
-.tutorial-marker {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #e2e8f0;
-  transition: background 0.3s ease;
+.tutorial-tip span {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
-.tutorial-marker.filled {
-  background: var(--accent);
+.tutorial-dismiss-hint {
+  margin-top: 12px;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  font-weight: 700;
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
+
 
 .clone-tab.always-visible,
 .rename-tab.always-visible,
@@ -1283,4 +1385,10 @@ button {
 .rename-tab.tutorial-highlight {
   border: 2px solid var(--accent);
   box-shadow: 0 0 10px var(--accent);
+}
+
+@media (max-width: 640px) {
+  .tutorial-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
