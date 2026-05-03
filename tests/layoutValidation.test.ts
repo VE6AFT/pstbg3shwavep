@@ -10,6 +10,7 @@ import {
   type LayoutTab,
   type ToolShape,
 } from "../functions/api/_shared";
+import { onRequestDelete, onRequestPut } from "../functions/api/tabs/[id]";
 
 function makeTool(overrides: Partial<ToolShape> = {}): ToolShape {
   return {
@@ -49,6 +50,71 @@ function requestWithJson(value: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
   });
+}
+
+type FakeTabRow = {
+  author_id: string | null;
+  name: string;
+  layout_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function makeTabRequest(tab: LayoutTab, headers: Record<string, string> = {}) {
+  return new Request(`https://example.test/api/tabs/${tab.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-Author-Id": "user-local", ...headers },
+    body: JSON.stringify(tab),
+  });
+}
+
+function makeDeleteRequest(tabId: string, headers: Record<string, string> = {}) {
+  return new Request(`https://example.test/api/tabs/${tabId}`, {
+    method: "DELETE",
+    headers: { "X-Author-Id": "user-local", ...headers },
+  });
+}
+
+function makeFakeEnv(initialRow: FakeTabRow | null) {
+  let row = initialRow;
+  let writes = 0;
+  const env = {
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async first() {
+                if (sql.includes("FROM tabs WHERE id = ?")) return row;
+                return null;
+              },
+              async run() {
+                writes += 1;
+                if (sql.includes("DELETE FROM tabs")) {
+                  row = null;
+                  return {};
+                }
+                row = {
+                  author_id: args[2] as string | null,
+                  name: args[1] as string,
+                  layout_json: args[3] as string,
+                  created_at: args[4] as string,
+                  updated_at: args[5] as string,
+                };
+                return {};
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  return {
+    env,
+    get row() { return row; },
+    get writes() { return writes; },
+  };
 }
 
 describe("layout tab validation", () => {
@@ -188,5 +254,89 @@ describe("layout tab validation", () => {
     expect(readAuthorIdHeader(new Request("https://example.test", {
       headers: { "X-Author-Id": "user with spaces" },
     }))).toBeNull();
+  });
+});
+
+describe("tab API revision checks", () => {
+  const serverRevision = "2026-04-30T02:00:00.000Z";
+  const existingRow: FakeTabRow = {
+    author_id: "user-local",
+    name: "Owned Draft",
+    layout_json: JSON.stringify(makeTab({ id: "tab-owned", name: "Owned Draft" }).layout),
+    created_at: "2026-04-30T00:00:00.000Z",
+    updated_at: serverRevision,
+  };
+
+  it("updates when the expected revision matches", async () => {
+    const fake = makeFakeEnv({ ...existingRow });
+    const response = await onRequestPut({
+      env: fake.env,
+      request: makeTabRequest(makeTab({ id: "tab-owned", name: "Renamed Draft" }), {
+        "X-Expected-Updated-At": serverRevision,
+      }),
+      params: { id: "tab-owned" },
+    } as any);
+
+    expect(response.status).toBe(200);
+    expect(fake.writes).toBe(1);
+    expect(fake.row?.name).toBe("Renamed Draft");
+  });
+
+  it("rejects stale updates without altering the row", async () => {
+    const fake = makeFakeEnv({ ...existingRow });
+    const response = await onRequestPut({
+      env: fake.env,
+      request: makeTabRequest(makeTab({ id: "tab-owned", name: "Stale Draft" }), {
+        "X-Expected-Updated-At": "2026-04-30T01:00:00.000Z",
+      }),
+      params: { id: "tab-owned" },
+    } as any);
+
+    expect(response.status).toBe(409);
+    expect(fake.writes).toBe(0);
+    expect(fake.row?.name).toBe("Owned Draft");
+  });
+
+  it("creates tabs without an expected revision", async () => {
+    const fake = makeFakeEnv(null);
+    const response = await onRequestPut({
+      env: fake.env,
+      request: makeTabRequest(makeTab({ id: "tab-new", name: "New Draft" })),
+      params: { id: "tab-new" },
+    } as any);
+
+    expect(response.status).toBe(200);
+    expect(fake.writes).toBe(1);
+    expect(fake.row?.name).toBe("New Draft");
+  });
+
+  it("rejects stale deletes without deleting", async () => {
+    const fake = makeFakeEnv({ ...existingRow });
+    const response = await onRequestDelete({
+      env: fake.env,
+      request: makeDeleteRequest("tab-owned", {
+        "X-Expected-Updated-At": "2026-04-30T01:00:00.000Z",
+      }),
+      params: { id: "tab-owned" },
+    } as any);
+
+    expect(response.status).toBe(409);
+    expect(fake.writes).toBe(0);
+    expect(fake.row).not.toBeNull();
+  });
+
+  it("deletes when the expected revision matches", async () => {
+    const fake = makeFakeEnv({ ...existingRow });
+    const response = await onRequestDelete({
+      env: fake.env,
+      request: makeDeleteRequest("tab-owned", {
+        "X-Expected-Updated-At": serverRevision,
+      }),
+      params: { id: "tab-owned" },
+    } as any);
+
+    expect(response.status).toBe(200);
+    expect(fake.writes).toBe(1);
+    expect(fake.row).toBeNull();
   });
 });

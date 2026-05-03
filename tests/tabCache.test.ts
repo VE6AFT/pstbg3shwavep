@@ -3,6 +3,7 @@ import {
   applyCachedLayout,
   cachedLayoutForTab,
   isCachedLayoutFresh,
+  shouldHydrateCachedTab,
   tabFromCachedMeta,
   toCachedTabMeta,
   type CachedTabLayout,
@@ -62,6 +63,7 @@ describe("tab cache shaping", () => {
     expect(layout).toEqual({
       id: "tab-owned",
       updatedAt: "2026-04-30T01:00:00.000Z",
+      dirtyAt: "2026-04-30T01:30:00.000Z",
       layout: tab.layout,
     });
   });
@@ -102,5 +104,32 @@ describe("tab cache shaping", () => {
 
     expect(isCachedLayoutFresh(tab, staleLayout)).toBe(false);
     expect(applyCachedLayout({ ...tab, hasLayout: false, layout: { unit: "in", tools: [] } }, staleLayout).hasLayout).toBe(false);
+  });
+
+  it("uses dirtyAt to validate unsynced cached layouts", () => {
+    const dirtyTab = makeTab({
+      syncState: "dirty",
+      dirtyAt: "2026-04-30T03:00:00.000Z",
+      updatedAt: "2026-04-30T01:00:00.000Z",
+    });
+    const freshDraftLayout: CachedTabLayout = {
+      id: dirtyTab.id,
+      updatedAt: "2026-04-30T01:00:00.000Z",
+      dirtyAt: "2026-04-30T03:00:00.000Z",
+      layout: dirtyTab.layout,
+    };
+    const staleDraftLayout: CachedTabLayout = {
+      ...freshDraftLayout,
+      dirtyAt: "2026-04-30T02:00:00.000Z",
+    };
+
+    expect(isCachedLayoutFresh(dirtyTab, freshDraftLayout)).toBe(true);
+    expect(isCachedLayoutFresh(dirtyTab, staleDraftLayout)).toBe(false);
+  });
+
+  it("hydrates active and unsynced cached summaries", () => {
+    expect(shouldHydrateCachedTab("tab-active", { id: "tab-active", syncState: "synced" })).toBe(true);
+    expect(shouldHydrateCachedTab("tab-active", { id: "tab-dirty", syncState: "dirty" })).toBe(true);
+    expect(shouldHydrateCachedTab("tab-active", { id: "tab-clean", syncState: "synced" })).toBe(false);
   });
 });

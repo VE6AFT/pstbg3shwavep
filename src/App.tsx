@@ -19,6 +19,7 @@ import {
   getDisketteStatus,
   hasFlushableTabs,
   isFlushableTab,
+  isUnsyncedTab,
   mergeRemoteTabSummaries,
   stripSyncMetadata,
   visibleTabs,
@@ -32,6 +33,7 @@ const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
+const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
 const TUTORIAL_STEP_MS = 5000;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
@@ -79,6 +81,7 @@ const GRID_SIZE_INCHES = 12;
 
 type DragState = {
   pointerId: number;
+  tabId: string;
   toolId: string;
   offsetX: number;
   offsetY: number;
@@ -422,6 +425,14 @@ function toolTransform(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "r
   return `translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`;
 }
 
+function isSamePersistedDraft(current: LayoutTab, draft: LayoutTab) {
+  return current.name === draft.name
+    && current.syncState === draft.syncState
+    && current.dirtyAt === draft.dirtyAt
+    && current.updatedAt === draft.updatedAt
+    && JSON.stringify(current.layout) === JSON.stringify(draft.layout);
+}
+
 function svgPointFromMatrix(matrix: DOMMatrix, clientX: number, clientY: number) {
   return new DOMPoint(clientX, clientY).matrixTransform(matrix);
 }
@@ -448,7 +459,7 @@ function cloneLayoutTab(source: LayoutTab): LayoutTab {
     clonedFromId: source.id,
     clonedFromName: source.name,
     createdAt: now,
-    updatedAt: now,
+    updatedAt: undefined,
     layout: {
       ...source.layout,
       tools: source.layout.tools.map((tool) => ({
@@ -479,6 +490,11 @@ class RequestError extends Error {
   }
 }
 
+async function readRequestErrorMessage(response: Response, fallback: string) {
+  const body = await response.json().catch(() => ({})) as { error?: string };
+  return body.error ?? fallback;
+}
+
 async function fetchTab(tabId: string, authorId: string) {
   const response = await fetch(`/api/tabs/${tabId}`, {
     headers: { "X-Author-Id": authorId },
@@ -490,14 +506,18 @@ async function fetchTab(tabId: string, authorId: string) {
 }
 
 async function saveTab(tab: LayoutTab, authorId: string) {
+  const headers: Record<string, string> = { "Content-Type": "application/json", "X-Author-Id": authorId };
+  if (tab.updatedAt) {
+    headers["X-Expected-Updated-At"] = tab.updatedAt;
+  }
   const response = await fetch(`/api/tabs/${tab.id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "X-Author-Id": authorId },
+    headers,
     body: JSON.stringify(stripSyncMetadata(tab)),
   });
 
   if (!response.ok) {
-    throw new RequestError(`Failed to save tab: ${response.status}`, response.status);
+    throw new RequestError(await readRequestErrorMessage(response, `Failed to save tab: ${response.status}`), response.status);
   }
 
   return (await response.json()) as SaveResponse;
@@ -531,20 +551,24 @@ async function persistClone(tab: LayoutTab, authorId: string) {
   }
 
   if (!response.ok) {
-    throw new RequestError(`Failed to clone tab: ${response.status}`, response.status);
+    throw new RequestError(await readRequestErrorMessage(response, `Failed to clone tab: ${response.status}`), response.status);
   }
 
   return (await response.json()) as SaveResponse;
 }
 
-async function deleteTabFromDb(tabId: string, authorId: string) {
+async function deleteTabFromDb(tabId: string, authorId: string, expectedUpdatedAt?: string) {
+  const headers: Record<string, string> = { "X-Author-Id": authorId };
+  if (expectedUpdatedAt) {
+    headers["X-Expected-Updated-At"] = expectedUpdatedAt;
+  }
   const response = await fetch(`/api/tabs/${tabId}`, {
     method: "DELETE",
-    headers: { "X-Author-Id": authorId },
+    headers,
   });
 
   if (!response.ok) {
-    throw new RequestError(`Failed to delete tab: ${response.status}`, response.status);
+    throw new RequestError(await readRequestErrorMessage(response, `Failed to delete tab: ${response.status}`), response.status);
   }
 }
 
@@ -679,6 +703,9 @@ function App() {
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
+  const deferredSyncFlushRef = useRef(false);
+  const cacheWriteInFlightRef = useRef(false);
+  const queuedCacheSnapshotRef = useRef<LayoutTab[] | null>(null);
   const flashTimerRef = useRef<number | null>(null);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
@@ -742,7 +769,6 @@ function App() {
           syncState,
           dirtyAt,
           syncError: undefined,
-          updatedAt: dirtyAt,
         };
       }),
     );
@@ -761,6 +787,10 @@ function App() {
   }, []);
 
   const flushUnsyncedTabs = useCallback(async () => {
+    if (dragState.current) {
+      deferredSyncFlushRef.current = true;
+      return;
+    }
     if (syncInFlightRef.current || !dbReachable) return;
     const candidates = tabsRef.current.filter(isFlushableTab);
     if (candidates.length === 0) return;
@@ -776,7 +806,7 @@ function App() {
         try {
           if (draft.syncState === "delete-pending") {
             pushDebugEvent("delete retry start");
-            await deleteTabFromDb(draft.id, localUserId);
+            await deleteTabFromDb(draft.id, localUserId, draft.updatedAt);
             setDbReachable(true);
             setTabs((current) => current.filter((tab) => tab.id !== draft.id));
             pushDebugEvent("delete ok");
@@ -787,7 +817,23 @@ function App() {
             pushDebugEvent("clone retry start");
             const { tab } = await persistClone(normalizeTab(draft), localUserId);
             setDbReachable(true);
-            setTabs((current) => orderTabs(current.map((item) => (item.id === draft.id ? withSyncedState(normalizeTab(tab)) : item))));
+            setTabs((current) => orderTabs(current.map((item) => {
+              if (item.id !== draft.id) return item;
+              if (!isSamePersistedDraft(item, draft)) {
+                deferredSyncFlushRef.current = true;
+                return {
+                  ...item,
+                  syncState: "dirty",
+                  syncError: undefined,
+                  createdAt: tab.createdAt ?? item.createdAt,
+                  updatedAt: tab.updatedAt ?? item.updatedAt,
+                  canEdit: tab.canEdit ?? item.canEdit,
+                  clonedFromId: tab.clonedFromId ?? item.clonedFromId,
+                  clonedFromName: tab.clonedFromName ?? item.clonedFromName,
+                };
+              }
+              return withSyncedState(normalizeTab(tab));
+            })));
             pushDebugEvent("clone ok");
             continue;
           }
@@ -795,7 +841,14 @@ function App() {
           pushDebugEvent("save start");
           const { tab } = await saveTab(normalizeTab(draft), localUserId);
           setDbReachable(true);
-          setTabs((current) => current.map((item) => (item.id === tab.id ? withSyncedState(normalizeTab(tab)) : item)));
+          setTabs((current) => current.map((item) => {
+            if (item.id !== tab.id) return item;
+            if (!isSamePersistedDraft(item, draft)) {
+              deferredSyncFlushRef.current = true;
+              return item;
+            }
+            return withSyncedState(normalizeTab(tab));
+          }));
           pushDebugEvent("save ok");
         } catch (err) {
           if (draft.syncState === "local-only" && err instanceof LimitError) {
@@ -824,6 +877,16 @@ function App() {
     } finally {
       syncInFlightRef.current = false;
       setSyncInFlight(false);
+      if (deferredSyncFlushRef.current && !dragState.current && dbReachable) {
+        deferredSyncFlushRef.current = false;
+        if (syncFlushTimer.current) {
+          window.clearTimeout(syncFlushTimer.current);
+        }
+        syncFlushTimer.current = window.setTimeout(() => {
+          syncFlushTimer.current = null;
+          void flushUnsyncedTabs();
+        }, 0);
+      }
     }
   }, [dbReachable, localUserId, pushDebugEvent]);
 
@@ -977,6 +1040,17 @@ function App() {
         if (!cancelled) pushDebugEvent("tab layout cache miss");
       }
 
+      if (isUnsyncedTab(tab)) {
+        if (tab.syncState === "error" && tab.syncError === MISSING_LOCAL_LAYOUT_MESSAGE) {
+          return;
+        }
+        setTabs((current) =>
+          current.map((item) => (item.id === tab.id ? { ...item, syncState: "error", syncError: MISSING_LOCAL_LAYOUT_MESSAGE } : item)),
+        );
+        pushDebugEvent("local draft layout unavailable");
+        return;
+      }
+
       try {
         const { tab: loaded } = await fetchTab(tab.id, localUserId);
         if (cancelled) return;
@@ -1014,14 +1088,17 @@ function App() {
     );
   }, [gridDark, snapMode, showInfra, showMezz]);
 
-  useEffect(() => {
-    if (!cacheReady) return;
+  const queueCacheSnapshotWrite = useCallback((snapshot: LayoutTab[]) => {
+    queuedCacheSnapshotRef.current = snapshot;
+    if (cacheWriteInFlightRef.current) return;
 
-    if (localWriteTimer.current) {
-      window.clearTimeout(localWriteTimer.current);
-    }
-    localWriteTimer.current = window.setTimeout(() => {
-      void writeTabCacheSnapshot(orderTabs(tabsRef.current.filter((tab) => !isStaticNowTab(tab)).map(normalizeTab)))
+    const writeNext = () => {
+      const nextSnapshot = queuedCacheSnapshotRef.current;
+      if (!nextSnapshot) return;
+
+      queuedCacheSnapshotRef.current = null;
+      cacheWriteInFlightRef.current = true;
+      void writeTabCacheSnapshot(nextSnapshot)
         .then(() => {
           pushDebugEvent("cache write ok");
         })
@@ -1029,8 +1106,25 @@ function App() {
           pushDebugEvent("cache write failed");
         })
         .finally(() => {
+          cacheWriteInFlightRef.current = false;
           localWriteTimer.current = null;
+          if (queuedCacheSnapshotRef.current) {
+            writeNext();
+          }
         });
+    };
+
+    writeNext();
+  }, [pushDebugEvent]);
+
+  useEffect(() => {
+    if (!cacheReady) return;
+
+    if (localWriteTimer.current) {
+      window.clearTimeout(localWriteTimer.current);
+    }
+    localWriteTimer.current = window.setTimeout(() => {
+      queueCacheSnapshotWrite(orderTabs(tabsRef.current.filter((tab) => !isStaticNowTab(tab)).map(normalizeTab)));
     }, LOCAL_WRITE_DELAY_MS);
 
     if (!initialized.current || syncInFlightRef.current || !dbReachable) return;
@@ -1038,7 +1132,7 @@ function App() {
       scheduleSyncFlush(saveDelayMs.current);
       saveDelayMs.current = DEFAULT_SAVE_DELAY_MS;
     }
-  }, [cacheReady, dbReachable, pushDebugEvent, scheduleSyncFlush, tabs]);
+  }, [cacheReady, dbReachable, queueCacheSnapshotWrite, scheduleSyncFlush, tabs]);
 
   useEffect(() => {
     activeTabButtonRef.current?.scrollIntoView({
@@ -1065,7 +1159,6 @@ function App() {
               ...tab.layout,
               tools: tab.layout.tools.map((t) => (t.id === tool.id ? { ...t, rotation: (t.rotation + 45) % 360 } : t)),
             },
-            updatedAt: new Date().toISOString(),
           };
         }),
       );
@@ -1081,6 +1174,7 @@ function App() {
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
+      tabId: activeTabId,
       toolId: tool.id,
       offsetX: local.x - tool.x,
       offsetY: local.y - tool.y,
@@ -1154,24 +1248,23 @@ function App() {
       if (current.isOverDelete) {
         setTabs((currentTabs) =>
           currentTabs.map((tab) => {
-            if (tab.id !== activeTabId) return tab;
+            if (tab.id !== current.tabId) return tab;
             return {
               ...tab,
               layout: {
                 ...tab.layout,
                 tools: tab.layout.tools.filter((tool) => tool.id !== current.toolId),
               },
-              updatedAt: new Date().toISOString(),
             };
           })
         );
-        markTabDirty(activeTabId, "Deleted tool");
+        markTabDirty(current.tabId, "Deleted tool");
       } else {
         const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
         if (moved) {
           setTabs((currentTabs) =>
             currentTabs.map((tab) => {
-              if (tab.id !== activeTabId) return tab;
+              if (tab.id !== current.tabId) return tab;
               return {
                 ...tab,
                 layout: {
@@ -1186,12 +1279,15 @@ function App() {
                       : tool,
                   ),
                 },
-                updatedAt: new Date().toISOString(),
               };
             }),
           );
-          markTabDirty(activeTabId, "Moved tool");
+          markTabDirty(current.tabId, "Moved tool");
         }
+      }
+      if (deferredSyncFlushRef.current && dbReachable) {
+        deferredSyncFlushRef.current = false;
+        scheduleSyncFlush(0);
       }
       paintDeleteZone(0);
       setDeleteProximity(0);
@@ -1317,7 +1413,6 @@ function App() {
       syncState: "draft-clone" as const,
       dirtyAt,
       syncError: undefined,
-      updatedAt: dirtyAt,
     };
     localAuthorTabCountRef.current += 1;
     setTabs((current) => orderTabs([...current, clone]));
@@ -1350,7 +1445,6 @@ function App() {
           return {
             ...tab,
             name: trimmed,
-            updatedAt: new Date().toISOString(),
           };
         }
 
@@ -1386,7 +1480,7 @@ function App() {
     setTabs((current) =>
       current.map((item) =>
         item.id === tab.id
-          ? { ...item, syncState: "delete-pending", dirtyAt, syncError: undefined, updatedAt: dirtyAt }
+          ? { ...item, syncState: "delete-pending", dirtyAt, syncError: undefined }
           : item,
       ),
     );

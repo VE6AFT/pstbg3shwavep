@@ -20,6 +20,7 @@ export function withSyncedState(tab: LayoutTab): LayoutTab {
 }
 
 export function isFlushableTab(tab: LayoutTab) {
+  if ((tab.syncState === "dirty" || tab.syncState === "local-only") && tab.hasLayout === false) return false;
   return FLUSHABLE_SYNC_STATES.has(tab.syncState);
 }
 
@@ -45,10 +46,15 @@ export function mergeRemoteTabSummaries(remoteTabs: LayoutTab[], currentTabs: La
   const merged = remoteTabs.map((remote) => {
     const current = currentById.get(remote.id);
 
-    if (current && shouldLocalVersionWin(current, remote)) {
+    if (current && shouldPreserveLocalOnlyVersion(current)) {
       return {
         ...current,
-        syncState: current.syncState === "local-only" ? "dirty" : current.syncState,
+        ...(current.syncState === "local-only" ? { syncState: "dirty" as const, syncError: undefined } : {}),
+        ...(current.syncState === "local-only" && remote.createdAt ? { createdAt: remote.createdAt } : {}),
+        ...(current.syncState === "local-only" && remote.updatedAt ? { updatedAt: remote.updatedAt } : {}),
+        ...(remote.canEdit !== undefined ? { canEdit: remote.canEdit } : {}),
+        ...(remote.clonedFromId !== undefined ? { clonedFromId: remote.clonedFromId } : {}),
+        ...(remote.clonedFromName !== undefined ? { clonedFromName: remote.clonedFromName } : {}),
       };
     }
 
@@ -102,16 +108,3 @@ function shouldPreserveLocalOnlyVersion(tab: LayoutTab) {
     || tab.syncState === "delete-pending";
 }
 
-function shouldLocalVersionWin(local: LayoutTab, remote: LayoutTab) {
-  if (!shouldPreserveLocalOnlyVersion(local)) return false;
-  const localTime = parseDateTime(local.dirtyAt);
-  const remoteTime = parseDateTime(remote.updatedAt);
-  if (localTime === null || remoteTime === null) return false;
-  return localTime > remoteTime;
-}
-
-function parseDateTime(value: string | undefined) {
-  if (!value) return null;
-  const time = new Date(value).getTime();
-  return Number.isFinite(time) ? time : null;
-}
