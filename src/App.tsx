@@ -8,12 +8,16 @@ import {
   useState,
 } from "react";
 import { TAB_LIMITS, VALIDATION_LIMITS } from "../functions/api/_shared";
+import { readFailedSyncMessage } from "./apiErrors";
 import nowSvg from "./assets/now.svg?raw";
 import { DebugPanel } from "./DebugPanel";
 import { seedTabs } from "./seed";
+import { makeShortId } from "./shortId";
+import { makeTabSlugId } from "./tabSlug";
 import { isStaticNowTab, makeStaticNowTab, NOW_TAB_NAME, withStaticNowTab } from "./staticNow";
 import { applyCachedLayout, clearTabCache, readCachedLayout, readCachedTabs, writeTabCacheSnapshot } from "./tabCache";
 import { countClientAuthorTabs, isClientAuthorTabLimitReached } from "./tabLimits";
+import { buildTabShareUrl, readSharedTabId, removeSharedTabFromUrl } from "./tabShare";
 import {
   disketteStatusLabel,
   getDisketteStatus,
@@ -28,19 +32,20 @@ import {
 import type { LayoutTab, SaveResponse, ToolShape } from "./types";
 import { useDebugPanel } from "./useDebugPanel";
 
-const OLD_TABS_STORAGE_KEY = "pstbg3shwavep-tabs";
 const ACTIVE_TAB_STORAGE_KEY = "pstbg3shwavep-active-tab";
 const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
+const TAB_DELETE_CONFIRM_MS = 3200;
 const TUTORIAL_STEP_MS = 5000;
+const SHARE_FEEDBACK_MS = 1800;
 const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
-const STATIC_TOOL_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
+const STATIC_TOOL_ACTIVITIES = new Set<NonNullable<ToolShape["activity"]>>([
   "undefined",
   "automotive",
   "blue",
@@ -54,6 +59,7 @@ const STATIC_TOOL_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
   "red",
   "social",
   "software/it",
+  "storage",
   "textiles/leather",
   "training",
   "wood",
@@ -117,6 +123,7 @@ type ClonePrompt = {
 } | null;
 type TutorialStep = typeof TUTORIAL_STEPS[number];
 type SnapMode = typeof SNAP_MODES[number];
+type ShareStatus = "idle" | "copied" | "failed";
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -144,34 +151,80 @@ function parseSvgDocument(markup: string) {
   return document;
 }
 
+function normalizeLayerLabel(value: string | null) {
+  return value?.trim().toLowerCase();
+}
+
+function removeInlineDisplay(element: Element) {
+  const style = element.getAttribute("style");
+  if (!style) return;
+
+  const nextStyle = style
+    .split(";")
+    .map((declaration) => declaration.trim())
+    .filter((declaration) => declaration && !declaration.toLowerCase().startsWith("display:"))
+    .join(";");
+
+  if (nextStyle) element.setAttribute("style", nextStyle);
+  else element.removeAttribute("style");
+}
+
 function isToolLayer(element: Element) {
   return element.id === "layer-tools"
-    || element.getAttribute("inkscape:label") === "tools"
+    || normalizeLayerLabel(element.getAttribute("inkscape:label")) === "tools"
     || element.getAttribute("data-layer") === "tools";
 }
 
-function isStaticToolObjectTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) return false;
-
-  let current: Element | null = target;
-  while (current) {
-    const parentElement: Element | null = current.parentElement;
-    if (parentElement && isToolLayer(parentElement) && current.tagName.toLowerCase() === "g") {
-      return true;
+function normalizeStaticSvgLayers(document: Document) {
+  Array.from(document.querySelectorAll("g")).forEach((element) => {
+    const layer = normalizeLayerLabel(element.getAttribute("inkscape:label") ?? element.getAttribute("data-layer"));
+    if (layer === "mezzanine") {
+      element.classList.add("mezzanine-layer");
+      element.setAttribute("data-layer", "mezzanine");
+      removeInlineDisplay(element);
     }
-    current = parentElement;
-  }
+    if (layer === "infrastructure" || layer === "infra") {
+      element.classList.add("infra-layer");
+      element.setAttribute("data-layer", "infrastructure");
+      removeInlineDisplay(element);
+    }
+  });
+}
 
-  return false;
+function removeExportedLayerVisibilityStyles(document: Document) {
+  Array.from(document.querySelectorAll("style")).forEach((element) => {
+    const text = element.textContent;
+    if (!text || !/\.infra-layer|\.mezzanine-layer/.test(text)) return;
+
+    const nextText = text
+      .replace(/\.infra-layer\s*\{\s*display\s*:\s*(?:block|none)\s*\}/gi, "")
+      .replace(/\.mezzanine-layer\s*\{\s*display\s*:\s*(?:block|none)\s*\}/gi, "")
+      .trim();
+
+    if (nextText) element.textContent = nextText;
+    else element.remove();
+  });
+}
+
+function normalizeStaticSvgDocument(document: Document) {
+  removeExportedLayerVisibilityStyles(document);
+  normalizeStaticSvgLayers(document);
+}
+
+function serializeSvgBody(document: Document) {
+  return Array.from(document.documentElement.childNodes)
+    .map((node) => new XMLSerializer().serializeToString(node))
+    .join("\n")
+    .trim();
 }
 
 function staticToolLayers(document: Document) {
   return Array.from(document.querySelectorAll("g")).filter(isToolLayer);
 }
 
-function readStaticToolScope(value: string | null) {
-  if (!value || !STATIC_TOOL_SCOPES.has(value as NonNullable<ToolShape["scope"]>)) return undefined;
-  return value as NonNullable<ToolShape["scope"]>;
+function readStaticToolActivity(value: string | null) {
+  if (!value || !STATIC_TOOL_ACTIVITIES.has(value as NonNullable<ToolShape["activity"]>)) return undefined;
+  return value as NonNullable<ToolShape["activity"]>;
 }
 
 function readStaticToolHazards(value: string | null) {
@@ -222,12 +275,11 @@ function extractStaticNowTools(markup: string): ToolShape[] {
           ?? rect?.getAttribute("stroke")
           ?? rect?.getAttribute("fill")
           ?? "#697074";
-        const scope = readStaticToolScope(group.getAttribute("data-tool-scope"));
+        const activity = readStaticToolActivity(group.getAttribute("data-tool-activity"));
         const hazards = readStaticToolHazards(group.getAttribute("data-tool-hazards"));
 
         return {
           id: group.id,
-          assetId: group.getAttribute("data-tool-asset-id") ?? group.id,
           name: group.getAttribute("inkscape:label")
             ?? group.getAttribute("aria-label")
             ?? group.querySelector("text")?.textContent?.trim()
@@ -238,7 +290,7 @@ function extractStaticNowTools(markup: string): ToolShape[] {
           height: readNumberAttribute(rect, "height", VALIDATION_LIMITS.minSize),
           rotation: readRotation(group.getAttribute("transform")),
           color,
-          ...(scope ? { scope } : {}),
+          ...(activity ? { activity } : {}),
           ...(hazards ? { hazards } : {}),
         };
       }),
@@ -249,15 +301,21 @@ function stripStaticToolLayers(markup: string) {
   const document = parseSvgDocument(markup);
   if (!document || typeof XMLSerializer === "undefined") return extractSvgBody(markup);
 
+  normalizeStaticSvgDocument(document);
   staticToolLayers(document).forEach((layer) => layer.remove());
-  return Array.from(document.documentElement.childNodes)
-    .map((node) => new XMLSerializer().serializeToString(node))
-    .join("\n")
-    .trim();
+  return serializeSvgBody(document);
+}
+
+function normalizeStaticSvgMarkup(markup: string) {
+  const document = parseSvgDocument(markup);
+  if (!document || typeof XMLSerializer === "undefined") return extractSvgBody(markup);
+
+  normalizeStaticSvgDocument(document);
+  return serializeSvgBody(document);
 }
 
 const NOW_VIEWBOX = parseSvgViewBox(nowSvg);
-const NOW_MARKUP = extractSvgBody(nowSvg);
+const NOW_MARKUP = normalizeStaticSvgMarkup(nowSvg);
 const NOW_GEOMETRY_MARKUP = stripStaticToolLayers(nowSvg);
 const STATIC_NOW_TAB = makeStaticNowTab({
   unit: "in",
@@ -306,10 +364,6 @@ function inchesToFeetInches(value: number) {
   return `${sign}${feet}' ${inches}"`;
 }
 
-function formatCloneName(id: string) {
-  return id.split("-").at(-1) ?? id;
-}
-
 function normalizeTabName(name: string | null | undefined, fallback: string) {
   const trimmed = name?.trim() ?? "";
   return (trimmed || fallback).slice(0, MAX_TAB_NAME_CHARS);
@@ -355,8 +409,6 @@ function normalizeTab(tab: LayoutTab, index = 0): LayoutTab {
   return {
     ...tab,
     name: normalizeTabName(tab.name, fallbackName),
-    clonedFromId: tab.clonedFromId ?? null,
-    clonedFromName: tab.clonedFromName ? normalizeTabName(tab.clonedFromName, "") : null,
     canEdit: tab.canEdit ?? false,
     hasLayout: tab.hasLayout ?? true,
     syncState: tab.syncState ?? "synced",
@@ -448,24 +500,27 @@ function clampViewBox(viewBox: ViewBox): ViewBox {
   };
 }
 
-function cloneLayoutTab(source: LayoutTab): LayoutTab {
-  const nextTabId = uid("tab");
+function cloneLayoutTab(source: LayoutTab, existingTabIds: Iterable<string>): LayoutTab {
+  const nextTabId = makeTabSlugId(existingTabIds);
   const now = new Date().toISOString();
+  const nextToolIds = new Set(source.layout.tools.map((tool) => tool.id));
 
   return {
     ...source,
     id: nextTabId,
-    name: formatCloneName(nextTabId),
-    clonedFromId: source.id,
-    clonedFromName: source.name,
+    name: nextTabId,
     createdAt: now,
     updatedAt: undefined,
     layout: {
       ...source.layout,
-      tools: source.layout.tools.map((tool) => ({
-        ...tool,
-        id: uid("tool"),
-      })),
+      tools: source.layout.tools.map((tool) => {
+        const id = makeShortId("tool", nextToolIds);
+        nextToolIds.add(id);
+        return {
+          ...tool,
+          id,
+        };
+      }),
     },
   };
 }
@@ -527,6 +582,11 @@ class LimitError extends Error { }
 
 const TERMINAL_SYNC_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
 
+function isTabCreationLimitError(error: unknown) {
+  return error instanceof LimitError
+    || (error instanceof RequestError && error.status === 429);
+}
+
 function isTerminalSyncError(error: unknown) {
   return error instanceof LimitError
     || (error instanceof RequestError && error.status !== undefined && TERMINAL_SYNC_STATUSES.has(error.status));
@@ -544,8 +604,7 @@ async function persistClone(tab: LayoutTab, authorId: string) {
   });
 
   if (response.status === 429) {
-    const body = await response.json().catch(() => ({})) as { error?: string };
-    const error = new LimitError(body.error ?? "tab limit reached");
+    const error = new LimitError(await readFailedSyncMessage(response));
     error.cause = response.status;
     throw error;
   }
@@ -582,6 +641,38 @@ function loadActiveTabId(tabs?: LayoutTab[]) {
   }
 }
 
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the textarea path for browsers that expose but reject clipboard writes.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+function isShareableTab(tab: LayoutTab | undefined) {
+  return Boolean(tab && !isStaticNowTab(tab) && tab.syncState !== "local-only" && tab.syncState !== "draft-clone");
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -615,7 +706,7 @@ function isValidToolSize(value: number) {
   return Number.isFinite(value) && value >= VALIDATION_LIMITS.minSize && value <= MAX_TOOL_SIZE_INCHES;
 }
 
-const SCOPE_COLORS = {
+const ACTIVITY_COLORS = {
   undefined: "#697074",
   automotive: "#2c3e50",
   electronics: "#27ae60",
@@ -626,6 +717,7 @@ const SCOPE_COLORS = {
   plastics: "#16a085",
   social: "#e67e22",
   "software/it": "#34495e",
+  storage: "#a1a1aa",
   "textiles/leather": "#936639",
   training: "#29b6f6",
   wood: "#f1c40f",
@@ -634,9 +726,29 @@ const SCOPE_COLORS = {
   blue: "#0000ff",
 } as const;
 
-function DisketteStatusIcon({ status, label, offline }: { status: ReturnType<typeof getDisketteStatus>; label: string; offline: boolean }) {
+function DisketteStatusIcon({
+  status,
+  label,
+  offline,
+  syncError,
+  persistentTooltip,
+}: {
+  status: ReturnType<typeof getDisketteStatus>;
+  label: string;
+  offline: boolean;
+  syncError?: string;
+  persistentTooltip?: boolean;
+}) {
+  const statusLabel = syncError ? `${label}: ${syncError}` : label;
+
   return (
-    <div className={`diskette-status ${status} ${offline ? "offline" : ""}`} aria-label={label} role="status">
+    <div
+      className={`diskette-status ${status} ${offline ? "offline" : ""} ${persistentTooltip ? "persistent-tooltip" : ""}`}
+      aria-label={statusLabel}
+      data-tooltip={syncError || undefined}
+      role="status"
+      tabIndex={syncError ? 0 : undefined}
+    >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path className="disk-body" d="M4 3h13l3 3v15H4V3Z" />
         <path className="disk-label" d="M7 3v7h10V3" />
@@ -661,8 +773,12 @@ function DisketteStatusIcon({ status, label, offline }: { status: ReturnType<typ
 
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
+  const [sharedTabId] = useState(() => readSharedTabId());
   const [tabs, setTabs] = useState<LayoutTab[]>(() => orderTabs(withStaticNowTab(seedTabs.map(normalizeTab), STATIC_NOW_TAB)));
-  const [activeTabId, setActiveTabId] = useState(() => loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id);
+  const [activeTabId, setActiveTabId] = useState(() => {
+    if (sharedTabId && visibleTabs(tabs).some((tab) => tab.id === sharedTabId)) return sharedTabId;
+    return loadActiveTabId() ?? tabs[0]?.id ?? seedTabs[0].id;
+  });
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [gridDark, setGridDark] = useState(() => loadControls().gridDark ?? true);
   const [snapMode, setSnapMode] = useState<SnapMode>(() => {
@@ -677,7 +793,7 @@ function App() {
     name: "",
     x: "",
     y: "",
-    scope: "undefined" as NonNullable<ToolShape["scope"]>,
+    activity: "undefined" as NonNullable<ToolShape["activity"]>,
     hazards: [] as NonNullable<ToolShape["hazards"]>,
   });
   const [addToolErrors, setAddToolErrors] = useState<Record<string, boolean>>({});
@@ -686,6 +802,8 @@ function App() {
   const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
@@ -696,10 +814,10 @@ function App() {
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
-  const [deleteProximity, setDeleteProximity] = useState(0);
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
+  const [tabCreationLimitMessage, setTabCreationLimitMessage] = useState<string | null>(null);
   const deleteProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
@@ -707,6 +825,9 @@ function App() {
   const cacheWriteInFlightRef = useRef(false);
   const queuedCacheSnapshotRef = useRef<LayoutTab[] | null>(null);
   const flashTimerRef = useRef<number | null>(null);
+  const deleteConfirmTimerRef = useRef<number | null>(null);
+  const shareFeedbackTimerRef = useRef<number | null>(null);
+  const sharedTabUrlCleanedRef = useRef(false);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
   const initialized = useRef(false);
@@ -716,18 +837,53 @@ function App() {
   const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
-  const canOfferClone = !isClientAuthorTabLimitReached(tabs, localUserId);
+  const canOfferClone = !tabCreationLimitMessage && !isClientAuthorTabLimitReached(tabs, localUserId);
+  const canShareActiveTab = isShareableTab(activeTab);
+  const shareTooltip = !canShareActiveTab
+    ? undefined
+    : shareStatus === "copied"
+      ? "copied link"
+      : shareStatus === "failed"
+        ? "copy failed"
+        : "copy link";
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const shouldPromptForClone = !canEdit;
   const pushDebugEvent = debugPanel.pushEvent;
-  const disketteStatus = getDisketteStatus(tabs, dbReachable, syncInFlight);
-  const disketteLabel = disketteStatusLabel(disketteStatus, dbReachable);
+  const syncErrorTab = activeTab?.syncError
+    ? activeTab
+    : displayedTabs.find((tab) => tab.syncError);
+  const syncErrorMessageForDiskette = syncErrorTab?.syncError
+    ? syncErrorTab.id === activeTab?.id
+      ? syncErrorTab.syncError
+      : `${syncErrorTab.name}: ${syncErrorTab.syncError}`
+    : undefined;
+  const persistentDisketteMessage = tabCreationLimitMessage ?? syncErrorMessageForDiskette;
+  const disketteStatus = persistentDisketteMessage
+    ? "dirty"
+    : getDisketteStatus(activeTab ? [activeTab] : [], dbReachable, syncInFlight);
+  const disketteLabel = tabCreationLimitMessage
+    ? "Tab creation blocked"
+    : syncErrorTab
+      ? "Sync rejected"
+      : disketteStatusLabel(disketteStatus, dbReachable);
+  const disketteSyncError = persistentDisketteMessage;
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
   }, []);
 
+  const flashShareStatus = useCallback((status: ShareStatus) => {
+    if (shareFeedbackTimerRef.current) window.clearTimeout(shareFeedbackTimerRef.current);
+    setShareStatus(status);
+    shareFeedbackTimerRef.current = window.setTimeout(() => {
+      shareFeedbackTimerRef.current = null;
+      setShareStatus("idle");
+    }, SHARE_FEEDBACK_MS);
+  }, []);
+
   const triggerClonePrompt = useCallback((tabId = activeTabId) => {
+    if (tabCreationLimitMessage) return;
     if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
     clonePromptRunRef.current += 1;
     const run = clonePromptRunRef.current;
@@ -739,15 +895,16 @@ function App() {
         return null;
       });
     }, 900);
-  }, [activeTabId]);
+  }, [activeTabId, tabCreationLimitMessage]);
 
   const paintDeleteZone = useCallback((level: number) => {
-    deleteProximityRef.current = level;
+    const clampedLevel = clamp(level, 0, 1);
+    deleteProximityRef.current = clampedLevel;
     const zone = deleteZoneRef.current;
     if (!zone) return;
-    const visibleLevel = Math.max(level, tutorialStep === "delete" ? 1 : 0);
-    zone.style.background = `rgb(${203 - (203 - 239) * visibleLevel}, ${213 - (213 - 68) * visibleLevel}, ${225 - (225 - 68) * visibleLevel})`;
-    zone.classList.toggle("shaking", level === 1);
+    const visibleLevel = Math.max(clampedLevel, tutorialStep === "delete" ? 1 : 0);
+    zone.style.setProperty("--delete-zone-level", String(visibleLevel));
+    zone.classList.toggle("shaking", clampedLevel === 1);
   }, [tutorialStep]);
 
   /**
@@ -864,6 +1021,12 @@ function App() {
           }));
           pushDebugEvent("save ok");
         } catch (err) {
+          if (isTabCreationLimitError(err)) {
+            const message = syncErrorMessage(err);
+            setTabCreationLimitMessage(message);
+            pushDebugEvent(`tab creation blocked: ${message}`);
+          }
+
           if (draft.syncState === "local-only" && err instanceof LimitError) {
             setDbReachable(true);
             localAuthorTabCountRef.current = Math.max(0, localAuthorTabCountRef.current - 1);
@@ -944,9 +1107,23 @@ function App() {
     }
   }, [activeTabId, canEdit]);
 
+  useEffect(() => {
+    if (shareFeedbackTimerRef.current) {
+      window.clearTimeout(shareFeedbackTimerRef.current);
+      shareFeedbackTimerRef.current = null;
+    }
+    setShareStatus("idle");
+  }, [activeTabId]);
+
   useEffect(() => () => {
     if (flashTimerRef.current) {
       window.clearTimeout(flashTimerRef.current);
+    }
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+    if (shareFeedbackTimerRef.current) {
+      window.clearTimeout(shareFeedbackTimerRef.current);
     }
     if (syncFlushTimer.current) {
       window.clearTimeout(syncFlushTimer.current);
@@ -976,19 +1153,29 @@ function App() {
   }, [paintDeleteZone]);
 
   useEffect(() => {
+    if (!sharedTabId || sharedTabUrlCleanedRef.current) return;
+    if (activeTabId !== sharedTabId) return;
+    if (!visibleTabs(tabs).some((tab) => tab.id === sharedTabId)) return;
+
+    removeSharedTabFromUrl();
+    sharedTabUrlCleanedRef.current = true;
+  }, [activeTabId, sharedTabId, tabs]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const loadTabs = async () => {
       try {
-        const savedTabId = loadActiveTabId();
-        const cachedTabs = orderTabs(withStaticNowTab((await readCachedTabs(savedTabId)).map(normalizeTab), STATIC_NOW_TAB));
+        const focusTabId = sharedTabId ?? loadActiveTabId();
+        const cachedTabs = orderTabs(withStaticNowTab((await readCachedTabs(focusTabId)).map(normalizeTab), STATIC_NOW_TAB));
         if (!cancelled && cachedTabs.length > 0) {
           tabsRef.current = cachedTabs;
           setTabs(cachedTabs);
           setActiveTabId((current) => {
+            const visible = visibleTabs(cachedTabs);
+            if (sharedTabId && visible.some((tab) => tab.id === sharedTabId)) return sharedTabId;
             const cachedActiveTabId = loadActiveTabId(visibleTabs(cachedTabs));
             if (cachedActiveTabId) return cachedActiveTabId;
-            const visible = visibleTabs(cachedTabs);
             return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? cachedTabs[0].id;
           });
           pushDebugEvent("cache load ok");
@@ -1010,6 +1197,7 @@ function App() {
         setTabs(normalized);
         setActiveTabId((current) => {
           const visible = visibleTabs(normalized);
+          if (sharedTabId && visible.some((tab) => tab.id === sharedTabId)) return sharedTabId;
           const savedTabId = loadActiveTabId(visible);
           if (savedTabId) return savedTabId;
           return visible.some((tab) => tab.id === current) ? current : visible[0]?.id ?? normalized[0]?.id ?? seedTabs[0].id;
@@ -1030,7 +1218,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [localUserId, pushDebugEvent]);
+  }, [localUserId, pushDebugEvent, sharedTabId]);
 
   useEffect(() => {
     const tab = tabs.find((item) => item.id === activeTabId);
@@ -1156,6 +1344,7 @@ function App() {
   }, [activeTabId, tabs.length]);
 
   const startToolDrag = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
     event.stopPropagation();
     if (!canEdit) {
       triggerClonePrompt();
@@ -1303,7 +1492,6 @@ function App() {
         scheduleSyncFlush(0);
       }
       paintDeleteZone(0);
-      setDeleteProximity(0);
     }
 
     const pan = panState.current;
@@ -1315,12 +1503,13 @@ function App() {
   };
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (event.target instanceof Element && event.target.closest(".tool-node")) return;
-    if (activeTabIsStaticNow && isStaticToolObjectTarget(event.target)) {
-      triggerClonePrompt(activeTab.id);
+    event.preventDefault();
+    const isToolTarget = event.target instanceof Element && Boolean(event.target.closest(".tool-node"));
+    if (isToolTarget) {
+      if (shouldPromptForClone) triggerClonePrompt();
       return;
     }
-    if (!canEdit && !activeTabIsStaticNow) {
+    if (shouldPromptForClone) {
       triggerClonePrompt();
     }
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1339,7 +1528,7 @@ function App() {
 
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
-    if (!canEdit && !activeTabIsStaticNow) {
+    if (shouldPromptForClone) {
       triggerClonePrompt();
     }
     const local = getSvgPoint(event.clientX, event.clientY);
@@ -1359,10 +1548,6 @@ function App() {
         height: nextHeight,
       });
     });
-  };
-
-  const catchDebugCode = (event: React.KeyboardEvent<HTMLElement>) => {
-    debugPanel.toggleFromKey(event.key);
   };
 
   const debugLines = useMemo(() => {
@@ -1385,7 +1570,7 @@ function App() {
   }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
 
   const handleCloneTab = async (source: LayoutTab) => {
-    if (isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
+    if (tabCreationLimitMessage || isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
       return;
     }
 
@@ -1420,7 +1605,7 @@ function App() {
 
     const dirtyAt = new Date().toISOString();
     const clone = {
-      ...cloneLayoutTab(sourceTab),
+      ...cloneLayoutTab(sourceTab, tabsRef.current.map((tab) => tab.id)),
       authorId: localUserId,
       hasLayout: true,
       syncState: "draft-clone" as const,
@@ -1445,8 +1630,7 @@ function App() {
       setRenamingTabId(null);
       return;
     }
-    const previousName = tabs.find((tab) => tab.id === tabId)?.name;
-    if (trimmed === previousName) {
+    if (trimmed === tabs.find((tab) => tab.id === tabId)?.name) {
       setRenamingTabId(null);
       setRenameDraft("");
       return;
@@ -1461,13 +1645,6 @@ function App() {
           };
         }
 
-        if (tab.clonedFromId === tabId || (!tab.clonedFromId && tab.clonedFromName === previousName)) {
-          return {
-            ...tab,
-            clonedFromName: trimmed,
-          };
-        }
-
         return tab;
       }),
     );
@@ -1478,6 +1655,12 @@ function App() {
 
   const deleteClonedTab = async (tab: LayoutTab) => {
     if (isStaticNowTab(tab)) return;
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteTabId((current) => (current === tab.id ? null : current));
+
     const fallbackTab = displayedTabs.find((item) => item.id !== tab.id) ?? seedTabs.map(normalizeTab)[0];
 
     setActiveTabId((current) => (current === tab.id ? fallbackTab.id : current));
@@ -1501,9 +1684,40 @@ function App() {
     pushDebugEvent("delete queued");
   };
 
+  const cancelAnimatedDelete = () => {
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteTabId(null);
+  };
+
+  const startAnimatedDelete = (tab: LayoutTab) => {
+    if (isStaticNowTab(tab) || confirmingDeleteTabId === tab.id) return;
+    if (deleteConfirmTimerRef.current) {
+      window.clearTimeout(deleteConfirmTimerRef.current);
+    }
+
+    setRenamingTabId((current) => (current === tab.id ? null : current));
+    setActiveTabId(tab.id);
+    setSelectedToolId(null);
+    setConfirmingDeleteTabId(tab.id);
+    deleteConfirmTimerRef.current = window.setTimeout(() => {
+      deleteConfirmTimerRef.current = null;
+      void deleteClonedTab(tab);
+    }, TAB_DELETE_CONFIRM_MS);
+  };
+
+  const holdAnimatedDelete = (event: ReactPointerEvent<HTMLButtonElement>, tab: LayoutTab) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    startAnimatedDelete(tab);
+  };
+
   const clearLocalDraft = () => {
-    localStorage.removeItem(OLD_TABS_STORAGE_KEY);
     localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
+    localStorage.removeItem(CONTROLS_STORAGE_KEY);
     localStorage.removeItem("pstbg3shwavep-tutorial-seen");
     void clearTabCache().catch(() => {
       pushDebugEvent("cache clear failed");
@@ -1565,6 +1779,19 @@ function App() {
     image.src = url;
   };
 
+  const shareActiveTab = async () => {
+    if (!activeTab || !canShareActiveTab) return;
+
+    try {
+      await copyTextToClipboard(buildTabShareUrl(activeTab.id));
+      flashShareStatus("copied");
+      pushDebugEvent("share link copied");
+    } catch {
+      flashShareStatus("failed");
+      pushDebugEvent("share link failed");
+    }
+  };
+
   const handleAddToolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const name = normalizeToolName(addToolForm.name);
@@ -1582,17 +1809,15 @@ function App() {
     const cx = viewBox.minX + viewBox.width / 2 - w / 2;
     const cy = viewBox.minY + viewBox.height / 2 - h / 2;
 
-    const newTool: ToolShape = {
-      id: uid("tool"),
-      assetId: "custom",
+    const newTool: Omit<ToolShape, "id"> = {
       name,
       x: cx,
       y: cy,
       width: w,
       height: h,
       rotation: 0,
-      color: SCOPE_COLORS[addToolForm.scope] ?? SCOPE_COLORS.undefined,
-      scope: addToolForm.scope,
+      color: ACTIVITY_COLORS[addToolForm.activity] ?? ACTIVITY_COLORS.undefined,
+      activity: addToolForm.activity,
       hazards: addToolForm.hazards.length > 0 ? addToolForm.hazards : undefined,
     };
 
@@ -1603,14 +1828,20 @@ function App() {
           ...tab,
           layout: {
             ...tab.layout,
-            tools: [...tab.layout.tools, newTool],
+            tools: [
+              ...tab.layout.tools,
+              {
+                ...newTool,
+                id: makeShortId("tool", tab.layout.tools.map((tool) => tool.id)),
+              },
+            ],
           },
         };
       })
     );
     markTabDirty(activeTabId, "saving in background");
     setShowAddTool(false);
-    setAddToolForm({ name: "", x: "", y: "", scope: "undefined", hazards: [] });
+    setAddToolForm({ name: "", x: "", y: "", activity: "undefined", hazards: [] });
     setAddToolErrors({});
   };
 
@@ -1620,7 +1851,6 @@ function App() {
         className="workspace"
         aria-label="Protospace Space Board The Board Game 3, Space Hard With A Vengeance Expansion Pack"
         tabIndex={0}
-        onKeyDown={catchDebugCode}
       >
         {debugPanel.isVisible && (
           <DebugPanel
@@ -1651,44 +1881,65 @@ function App() {
         )}
 
         <div className="bottom-controls-wrap">
-          <div className="floorplan-controls" aria-label="Floorplan controls">
-            <DisketteStatusIcon status={disketteStatus} label={disketteLabel} offline={!dbReachable} />
-            {canEdit && (
+          <div className="floorplan-controls-stack">
+            {(!activeTabIsStaticNow || disketteSyncError) && (
+              <DisketteStatusIcon
+                status={disketteStatus}
+                label={disketteLabel}
+                offline={!dbReachable}
+                syncError={disketteSyncError}
+                persistentTooltip={Boolean(disketteSyncError)}
+              />
+            )}
+            <div className="floorplan-controls" aria-label="Floorplan controls">
               <button
                 type="button"
                 className={tutorialStep === "add" ? "tutorial-highlight" : ""}
-                onClick={() => setShowAddTool((current) => (tutorialStep === "add" ? true : !current))}
+                onClick={() => {
+                  if (!canEdit) return;
+                  setShowAddTool((current) => (tutorialStep === "add" ? true : !current));
+                }}
+                disabled={!canEdit}
               >
                 {showAddTool ? "− add" : "+ add"}
               </button>
-            )}
-            <label>
-              <input type="checkbox" checked={gridDark} onChange={(event) => setGridDark(event.target.checked)} />
-              grid
-            </label>
-            <label className={`snap-control ${snapMode}`} data-tooltip={snapMode === "off" ? undefined : snapModeLabel(snapMode)}>
-              <input
-                type="checkbox"
-                className="snap-checkbox"
-                checked={snapMode !== "off"}
-                aria-label={`snap: ${snapModeLabel(snapMode)}`}
-                aria-checked={snapMode === "center" ? "mixed" : snapMode !== "off"}
-                onChange={() => setSnapMode((current) => nextSnapMode(current))}
-              />
-              snap
-            </label>
-            <label>
-              <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
-              mezz
-            </label>
-            <label>
-              <input type="checkbox" checked={showInfra} onChange={(event) => setShowInfra(event.target.checked)} />
-              infra
-            </label>
-            <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
-            <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
+              <label>
+                <input type="checkbox" checked={gridDark} onChange={(event) => setGridDark(event.target.checked)} />
+                grid
+              </label>
+              <label className={`snap-control ${snapMode}`} data-tooltip={snapMode === "off" ? undefined : snapModeLabel(snapMode)}>
+                <input
+                  type="checkbox"
+                  className="snap-checkbox"
+                  checked={snapMode !== "off"}
+                  aria-label={`snap: ${snapModeLabel(snapMode)}`}
+                  aria-checked={snapMode === "center" ? "mixed" : snapMode !== "off"}
+                  onChange={() => setSnapMode((current) => nextSnapMode(current))}
+                />
+                snap
+              </label>
+              <label>
+                <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
+                mezz
+              </label>
+              <label>
+                <input type="checkbox" checked={showInfra} onChange={(event) => setShowInfra(event.target.checked)} />
+                infra
+              </label>
+              <button type="button" data-tooltip="SVG" onClick={exportSvg}>export</button>
+              <button type="button" data-tooltip="PNG" onClick={exportPng}>photo</button>
+              <button
+                type="button"
+                data-tooltip={shareTooltip}
+                onClick={shareActiveTab}
+                disabled={!canShareActiveTab}
+                aria-label={canShareActiveTab ? `Copy link to ${activeTab.name}` : "Share link unavailable until this tab syncs"}
+              >
+                {shareStatus === "copied" ? "copied" : shareStatus === "failed" ? "failed" : "share"}
+              </button>
+            </div>
           </div>
-          {showAddTool && (
+          {showAddTool && canEdit && (
             <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
@@ -1739,7 +1990,7 @@ function App() {
                 </label>
               </div>
               <label>
-                <select value={addToolForm.scope} onChange={(e) => setAddToolForm({ ...addToolForm, scope: e.target.value as any })}>
+                <select value={addToolForm.activity} onChange={(e) => setAddToolForm({ ...addToolForm, activity: e.target.value as any })}>
                   <option value="undefined">activity</option>
                   <option value="automotive">automotive</option>
                   <option value="electronics">electronics</option>
@@ -1750,6 +2001,7 @@ function App() {
                   <option value="plastics">plastics</option>
                   <option value="social">social</option>
                   <option value="software/it">software/it</option>
+                  <option value="storage">storage</option>
                   <option value="textiles/leather">textiles/leather</option>
                   <option value="training">training</option>
                   <option value="wood">wood</option>
@@ -1798,14 +2050,15 @@ function App() {
           onPointerMove={moveToolDrag}
           onPointerUp={endToolDrag}
           onPointerCancel={endToolDrag}
+          onDragStart={(event) => event.preventDefault()}
           onContextMenu={(e) => e.preventDefault()}
         >
           <defs>
             <pattern id="grid" width="12" height="12" patternUnits="userSpaceOnUse">
-              <path d="M 12 0 L 0 0 0 12" fill="none" stroke={`rgba(32,36,39,${gridDark ? "0.1" : "0.08"})`} strokeWidth={0.8} />
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#202427" strokeOpacity={gridDark ? 0.1 : 0.08} strokeWidth={0.8} />
             </pattern>
             <pattern id="stage-grid" width="12" height="12" patternUnits="userSpaceOnUse">
-              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="rgba(32,36,39,0.36)" strokeWidth={1.2} />
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#202427" strokeOpacity={0.36} strokeWidth={1.2} />
             </pattern>
           </defs>
 
@@ -1856,6 +2109,9 @@ function App() {
                   ].filter(Boolean).join(" ")}
                   style={{ color: tool.color }}
                   data-tool-id={tool.id}
+                  data-tool-activity={tool.activity}
+                  data-tool-hazards={tool.hazards?.join(",")}
+                  data-tool-color={tool.color}
                   transform={toolTransform(tool)}
                   onPointerDown={(event) => startToolDrag(event, tool)}
                 >
@@ -1929,10 +2185,7 @@ function App() {
         {canEdit && (
           <div
             ref={deleteZoneRef}
-            className={`delete-zone ${deleteProximity === 1 ? "shaking" : ""} ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
-            style={{
-              background: `rgb(${203 - (203 - 239) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${213 - (213 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)}, ${225 - (225 - 68) * Math.max(deleteProximity, tutorialStep === "delete" ? 1 : 0)})`,
-            }}
+            className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
             aria-label="Drop here to delete"
           >
             <svg viewBox="0 0 24 24">
@@ -1951,15 +2204,18 @@ function App() {
           const isNow = isStaticNowTab(tab);
           const isActive = tab.id === activeTabId;
           const isUserTab = tab.canEdit === true || tab.authorId === localUserId;
+          const isOwnTab = !isNow && isUserTab;
+          const tabClassName = `sheet-tab${isActive ? " active" : ""}`;
+          const isConfirmingDelete = confirmingDeleteTabId === tab.id;
           const isRenameStep = tutorialStep === "rename" && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
           return (
             <div
               key={tab.id}
-              className="sheet-tab-wrap"
+              className={`sheet-tab-wrap${isConfirmingDelete ? " deleting" : ""}`}
             >
-              {!isNow && isUserTab && (
+              {isOwnTab && (
                 <button
                   type="button"
                   className={`rename-tab ${isRenameStep ? "tutorial-highlight flashing always-visible" : ""}`}
@@ -1967,7 +2223,6 @@ function App() {
                     setRenamingTabId(tab.id);
                     setRenameDraft(tab.name);
                   }}
-                  title={`Rename ${tab.name}`}
                   aria-label={`Rename ${tab.name}`}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1976,13 +2231,14 @@ function App() {
                   </svg>
                 </button>
               )}
-              {!isNow && isUserTab && (
+              {isOwnTab && (
                 <button
                   type="button"
-                  className="delete-tab"
-                  onClick={() => deleteClonedTab(tab)}
-                  title={`Delete ${tab.name}`}
-                  aria-label={`Delete ${tab.name}`}
+                  className={`delete-tab always-visible${isConfirmingDelete ? " confirming" : ""}`}
+                  onPointerDown={(event) => holdAnimatedDelete(event, tab)}
+                  onPointerUp={cancelAnimatedDelete}
+                  onPointerCancel={cancelAnimatedDelete}
+                  aria-label={`Hold to delete ${tab.name}`}
                 >
                   ×
                 </button>
@@ -1993,7 +2249,6 @@ function App() {
                   type="button"
                   className={`clone-tab ${isNow || isClonePrompted ? "always-visible" : ""} ${isClonePrompted ? "flashing" : ""}`}
                   onClick={() => handleCloneTab(tab)}
-                  title={`Clone ${tab.name}`}
                   aria-label={`Clone ${tab.name}`}
                 >
                   <span aria-hidden="true">+</span>
@@ -2003,7 +2258,7 @@ function App() {
                 <button
                   ref={tab.id === activeTab.id ? setActiveTabElement : undefined}
                   type="button"
-                  className={tab.id === activeTab.id ? "sheet-tab active" : "sheet-tab"}
+                  className={tabClassName}
                   style={{ visibility: renamingTabId === tab.id ? "hidden" : "visible" }}
                   onClick={() => {
                     setActiveTabId(tab.id);
@@ -2014,7 +2269,7 @@ function App() {
                 </button>
                 {renamingTabId === tab.id && (
                   <input
-                    className={tab.id === activeTab.id ? "sheet-tab tab-name-input active" : "sheet-tab tab-name-input"}
+                    className={`${tabClassName} tab-name-input`}
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", boxSizing: "border-box" }}
                     value={renameDraft}
                     autoFocus
@@ -2095,8 +2350,7 @@ function App() {
                     <path d="m13 7 4 4" />
                   </svg>
                 </div>
-                <h3>Rename this tab</h3>
-                <p>Create your Protospace!</p>
+                <h3>Rename this tab and create your Protospace!</h3>
               </>
             )}
             <div className="tutorial-progress-wrap">

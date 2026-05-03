@@ -5,7 +5,7 @@ import type { LayoutTab } from "../src/types";
 
 function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
   return {
-    id: "tab-owned",
+    id: "owned",
     name: "Owned Draft",
     layout: { unit: "in", tools: [] },
     ...overrides,
@@ -15,10 +15,10 @@ function makeTab(overrides: Partial<LayoutTab> = {}): LayoutTab {
 describe("client author tab limits", () => {
   it("counts remote editable tabs and local authored tabs", () => {
     const tabs = [
-      makeTab({ id: "tab-default", name: "Now", canEdit: false }),
-      makeTab({ id: "tab-remote-owned", canEdit: true }),
-      makeTab({ id: "tab-local-only", authorId: "user-local" }),
-      makeTab({ id: "tab-someone-else", authorId: "user-other", canEdit: false }),
+      makeTab({ id: "now", name: "Now", canEdit: false }),
+      makeTab({ id: "remote-owned", canEdit: true }),
+      makeTab({ id: "local-only", authorId: "user-local" }),
+      makeTab({ id: "someone-else", authorId: "user-other", canEdit: false }),
     ];
 
     expect(countClientAuthorTabs(tabs, "user-local")).toBe(2);
@@ -26,7 +26,7 @@ describe("client author tab limits", () => {
 
   it("treats the twentieth authored tab as the clone limit", () => {
     const tabs = Array.from({ length: TAB_LIMITS.perAuthor }, (_, index) =>
-      makeTab({ id: `tab-${index}`, canEdit: true }),
+      makeTab({ id: `sheet-${index}`, canEdit: true }),
     );
 
     expect(isClientAuthorTabLimitReached(tabs, "user-local")).toBe(true);

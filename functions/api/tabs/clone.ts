@@ -43,8 +43,6 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
       ...body.tab,
       authorId,
       canEdit: true,
-      clonedFromId: null,
-      clonedFromName: null,
       createdAt: updatedAt,
       updatedAt,
     };
