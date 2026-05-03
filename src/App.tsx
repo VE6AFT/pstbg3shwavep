@@ -750,6 +750,13 @@ function App() {
     zone.classList.toggle("shaking", level === 1);
   }, [tutorialStep]);
 
+  /**
+   * Marks a tab as having unsynced local changes and schedules a background flush.
+   * @param tabId The ID of the tab to mark dirty.
+   * @param message Debug message describing the reason for the change.
+   * @param delayMs Optional delay before flushing to the server (debouncing).
+   * @param options.flushDraftClone If true, converts a 'draft-clone' into a 'local-only' tab immediately.
+   */
   const markTabDirty = useCallback((tabId: string, message: string, delayMs: number = DEFAULT_SAVE_DELAY_MS, options: { flushDraftClone?: boolean } = {}) => {
     const dirtyAt = new Date().toISOString();
     saveDelayMs.current = delayMs;
@@ -786,8 +793,14 @@ function App() {
     return point.matrixTransform(matrix.inverse());
   }, []);
 
+  /**
+   * The core background sync loop.
+   * It identifies tabs that need to be saved, created, or deleted and performs the API calls.
+   * It handles sequential processing and transient error recovery.
+   */
   const flushUnsyncedTabs = useCallback(async () => {
     if (dragState.current) {
+      // Defer sync if the user is currently dragging an object to avoid jank
       deferredSyncFlushRef.current = true;
       return;
     }
