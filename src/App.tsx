@@ -38,7 +38,6 @@ const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
 const TAB_DELETE_CONFIRM_MS = 2200;
-
 const SHARE_FEEDBACK_MS = 1800;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
 const DIMS_MODES = ["off", "selected", "all"] as const;
@@ -381,7 +380,11 @@ function inchesToFeetInches(value: number) {
   const total = Math.round(Math.abs(value));
   const feet = Math.floor(total / 12);
   const inches = total % 12;
-  return `${sign}${feet}' ${inches}"`;
+  const parts = [
+    feet > 0 ? `${feet}'` : "",
+    inches > 0 ? `${inches}"` : "",
+  ].filter(Boolean);
+  return `${sign}${parts.length > 0 ? parts.join(" ") : `0"`}`;
 }
 
 function normalizeTabName(name: string | null | undefined, fallback: string) {
@@ -2367,36 +2370,36 @@ function App() {
                     <g className="selected-tool-overlay" aria-label={`Selected controls for ${tool.name}`}>
                       {showToolDims && (
                         <g className="dimension-callouts" aria-hidden="true">
-                        <line className="dimension-extension" x1={0} y1={tool.height} x2={0} y2={tool.height + 11} />
-                        <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width} y2={tool.height + 11} />
-                        <line className="dimension-line" x1={0} y1={tool.height + 8} x2={tool.width} y2={tool.height + 8} />
-                        <path className="dimension-arrow" d={`M7 ${tool.height + 5} L0 ${tool.height + 8} L7 ${tool.height + 11}`} />
-                        <path className="dimension-arrow" d={`M${tool.width - 7} ${tool.height + 5} L${tool.width} ${tool.height + 8} L${tool.width - 7} ${tool.height + 11}`} />
-                        <text
-                          className="dimension-label"
-                          x={tool.width / 2}
-                          y={tool.height + 18}
-                          dominantBaseline="middle"
-                          textAnchor="middle"
-                        >
-                          {inchesToFeetInches(tool.width)}
-                        </text>
+                          <line className="dimension-extension" x1={0} y1={tool.height} x2={0} y2={tool.height + 11} />
+                          <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width} y2={tool.height + 11} />
+                          <line className="dimension-line" x1={0} y1={tool.height + 8} x2={tool.width} y2={tool.height + 8} />
+                          <path className="dimension-arrow" d={`M7 ${tool.height + 5} L0 ${tool.height + 8} L7 ${tool.height + 11}`} />
+                          <path className="dimension-arrow" d={`M${tool.width - 7} ${tool.height + 5} L${tool.width} ${tool.height + 8} L${tool.width - 7} ${tool.height + 11}`} />
+                          <text
+                            className="dimension-label"
+                            x={tool.width / 2}
+                            y={tool.height + 18}
+                            dominantBaseline="middle"
+                            textAnchor="middle"
+                          >
+                            {inchesToFeetInches(tool.width)}
+                          </text>
 
-                        <line className="dimension-extension" x1={tool.width} y1={0} x2={tool.width + 11} y2={0} />
-                        <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width + 11} y2={tool.height} />
-                        <line className="dimension-line" x1={tool.width + 8} y1={0} x2={tool.width + 8} y2={tool.height} />
-                        <path className="dimension-arrow" d={`M${tool.width + 5} 7 L${tool.width + 8} 0 L${tool.width + 11} 7`} />
-                        <path className="dimension-arrow" d={`M${tool.width + 5} ${tool.height - 7} L${tool.width + 8} ${tool.height} L${tool.width + 11} ${tool.height - 7}`} />
-                        <text
-                          className="dimension-label"
-                          x={tool.width + 8}
-                          y={tool.height / 2}
-                          dominantBaseline="middle"
-                          textAnchor="middle"
-                          transform={`rotate(-90 ${tool.width + 8} ${tool.height / 2})`}
-                        >
-                          {inchesToFeetInches(tool.height)}
-                        </text>
+                          <line className="dimension-extension" x1={tool.width} y1={0} x2={tool.width + 11} y2={0} />
+                          <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width + 11} y2={tool.height} />
+                          <line className="dimension-line" x1={tool.width + 8} y1={0} x2={tool.width + 8} y2={tool.height} />
+                          <path className="dimension-arrow" d={`M${tool.width + 5} 7 L${tool.width + 8} 0 L${tool.width + 11} 7`} />
+                          <path className="dimension-arrow" d={`M${tool.width + 5} ${tool.height - 7} L${tool.width + 8} ${tool.height} L${tool.width + 11} ${tool.height - 7}`} />
+                          <text
+                            className="dimension-label"
+                            x={tool.width + 8}
+                            y={tool.height / 2}
+                            dominantBaseline="middle"
+                            textAnchor="middle"
+                            transform={`rotate(-90 ${tool.width + 8} ${tool.height / 2})`}
+                          >
+                            {inchesToFeetInches(tool.height)}
+                          </text>
                         </g>
                       )}
 
@@ -2540,7 +2543,14 @@ function App() {
       </nav>
 
       {tutorialStep && (
-        <div className="tutorial-overlay" onClick={() => { setTutorialStep(null); setShowAddTool(false); }}>
+        <div
+          className="tutorial-overlay"
+          aria-label="Board tutorial"
+          onClick={() => {
+            setTutorialStep(null);
+            setShowAddTool(false);
+          }}
+        >
           <div className="tutorial-tip scroll-tip">
             <div className="tutorial-zoom-callout" aria-hidden="true">
               <div className="tutorial-mouse">
@@ -2553,22 +2563,21 @@ function App() {
             </div>
             <strong>Scroll</strong>
             <span>zoom the floorplan</span>
-            <p className="tutorial-dismiss-hint">Click anywhere to dismiss</p>
           </div>
 
           <div className="tutorial-tip add-tip">
-            <strong>Add</strong>
-            <span>spawn equipment from the panel</span>
+            <strong>Add tools</strong>
+            <span>spawn objects onto the floor</span>
           </div>
 
           <div className="tutorial-tip drop-tip">
-            <strong>Drop</strong>
-            <span>delete or copy with targets</span>
+            <strong>Drop here</strong>
+            <span>to delete or copy</span>
           </div>
 
           <div className="tutorial-tip rename-tip">
-            <strong>Rename</strong>
-            <span>label your new tab</span>
+            <strong>Rename tab</strong>
+            <span>label your new space</span>
           </div>
         </div>
       )}
