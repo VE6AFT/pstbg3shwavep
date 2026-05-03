@@ -155,21 +155,6 @@ function isToolLayer(element: Element) {
     || element.getAttribute("data-layer") === "tools";
 }
 
-function isStaticToolObjectTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) return false;
-
-  let current: Element | null = target;
-  while (current) {
-    const parentElement: Element | null = current.parentElement;
-    if (parentElement && isToolLayer(parentElement) && current.tagName.toLowerCase() === "g") {
-      return true;
-    }
-    current = parentElement;
-  }
-
-  return false;
-}
-
 function staticToolLayers(document: Document) {
   return Array.from(document.querySelectorAll("g")).filter(isToolLayer);
 }
@@ -779,6 +764,7 @@ function App() {
         : "copy link";
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
+  const shouldPromptForClone = !canEdit;
   const pushDebugEvent = debugPanel.pushEvent;
   const syncErrorTab = activeTab?.syncError
     ? activeTab
@@ -1387,12 +1373,12 @@ function App() {
   };
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (event.target instanceof Element && event.target.closest(".tool-node")) return;
-    if (activeTabIsStaticNow && isStaticToolObjectTarget(event.target)) {
-      triggerClonePrompt(activeTab.id);
+    const isToolTarget = event.target instanceof Element && Boolean(event.target.closest(".tool-node"));
+    if (isToolTarget) {
+      if (shouldPromptForClone) triggerClonePrompt();
       return;
     }
-    if (!canEdit && !activeTabIsStaticNow) {
+    if (shouldPromptForClone) {
       triggerClonePrompt();
     }
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1411,7 +1397,7 @@ function App() {
 
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
-    if (!canEdit && !activeTabIsStaticNow) {
+    if (shouldPromptForClone) {
       triggerClonePrompt();
     }
     const local = getSvgPoint(event.clientX, event.clientY);
