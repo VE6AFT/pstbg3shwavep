@@ -153,6 +153,12 @@ export function readAuthorIdHeader(request: Request) {
   return value;
 }
 
+export function readExpectedUpdatedAtHeader(request: Request) {
+  const value = request.headers.get("X-Expected-Updated-At");
+  if (!value) return null;
+  return value.length <= 64 ? value : null;
+}
+
 export function readLayoutTab(row: TabRow): LayoutTab {
   const hasLayout = typeof row.layout_json === "string";
   const tab: LayoutTab = {
