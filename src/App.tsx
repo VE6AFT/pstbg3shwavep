@@ -1421,10 +1421,6 @@ function App() {
     });
   };
 
-  const catchDebugCode = (event: React.KeyboardEvent<HTMLElement>) => {
-    debugPanel.toggleFromKey(event.key);
-  };
-
   const debugLines = useMemo(() => {
     const selected = selectedTool
       ? `${selectedTool.name} ${inchesToFeetInches(selectedTool.width)}x${inchesToFeetInches(selectedTool.height)}`
@@ -1728,7 +1724,6 @@ function App() {
         className="workspace"
         aria-label="Protospace Space Board The Board Game 3, Space Hard With A Vengeance Expansion Pack"
         tabIndex={0}
-        onKeyDown={catchDebugCode}
       >
         {debugPanel.isVisible && (
           <DebugPanel
