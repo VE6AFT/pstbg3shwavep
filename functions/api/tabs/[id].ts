@@ -2,6 +2,7 @@ import {
   json,
   publicLayoutTab,
   readAuthorIdHeader,
+  readExpectedUpdatedAtHeader,
   readLayoutTab,
   readTabCreationLimit,
   parseLayoutTabRequest,
@@ -15,7 +16,32 @@ import {
   type TabRow,
 } from "../_shared";
 
+type ExistingTabRow = {
+  author_id: string | null;
+  name: string;
+  layout_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function existingTab(id: string, row: ExistingTabRow): LayoutTab {
+  return readLayoutTab({
+    id,
+    name: row.name,
+    author_id: row.author_id,
+    can_edit: true,
+    layout_json: row.layout_json,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  });
+}
+
+function conflictResponse(tab: LayoutTab, message = "Tab changed in database") {
+  return json({ error: message, tab: publicLayoutTab(tab), updatedAt: tab.updatedAt }, { status: 409 });
+}
+
 export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
+  const tabId = Array.isArray(params.id) ? params.id[0] : params.id;
   const authorId = readAuthorIdHeader(request);
   const row = await env.DB.prepare(
     `SELECT
@@ -31,7 +57,7 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, par
     FROM tabs
     WHERE tabs.id = ?`,
   )
-    .bind(authorId, params.id)
+    .bind(authorId, tabId)
     .first<TabRow>();
 
   if (!row) {
@@ -43,21 +69,23 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({ env, request, par
 
 export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
   try {
+    const tabId = Array.isArray(params.id) ? params.id[0] : params.id;
     const body = await parseLayoutTabRequest(request);
     const authorId = readAuthorIdHeader(request);
     if (!authorId) {
       return json({ error: "Missing author id" }, { status: 400 });
     }
 
-    if (body.id !== params.id) {
+    if (body.id !== tabId) {
       return json({ error: "Route tab id does not match payload id" }, { status: 400 });
     }
 
-    if (params.id === STATIC_NOW_TAB_ID || body.id === STATIC_NOW_TAB_ID || body.name === STATIC_NOW_TAB_NAME) {
+    if (tabId === STATIC_NOW_TAB_ID || body.id === STATIC_NOW_TAB_ID || body.name === STATIC_NOW_TAB_NAME) {
       return json({ error: "The Now tab is static and cannot be saved" }, { status: 400 });
     }
 
     const layoutJson = JSON.stringify(body.layout);
+    const expectedUpdatedAt = readExpectedUpdatedAtHeader(request);
     const existing = await env.DB.prepare("SELECT author_id, name, layout_json, created_at, updated_at FROM tabs WHERE id = ?").bind(body.id).first<{
       author_id: string | null;
       name: string;
@@ -67,6 +95,12 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
     }>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to edit this tab" }, { status: 403 });
+    }
+    if (existing && expectedUpdatedAt !== existing.updated_at) {
+      return conflictResponse(
+        existingTab(body.id, existing),
+        expectedUpdatedAt ? "Tab changed in database" : "Missing expected tab revision",
+      );
     }
 
     if (!existing) {
@@ -119,7 +153,8 @@ export const onRequestPut: PagesFunction<Env, "id"> = async ({ env, request, par
 
 export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, params }) => {
   try {
-    if (params.id === STATIC_NOW_TAB_ID) {
+    const tabId = Array.isArray(params.id) ? params.id[0] : params.id;
+    if (tabId === STATIC_NOW_TAB_ID) {
       return json({ error: "The Now tab cannot be deleted" }, { status: 400 });
     }
 
@@ -128,15 +163,24 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({ env, request, 
       return json({ error: "Missing author id" }, { status: 400 });
     }
 
-    const existing = await env.DB.prepare("SELECT author_id FROM tabs WHERE id = ?").bind(params.id).first<{ author_id: string | null }>();
+    const existing = await env.DB.prepare("SELECT author_id, name, layout_json, created_at, updated_at FROM tabs WHERE id = ?").bind(tabId).first<ExistingTabRow>();
     if (existing && existing.author_id && existing.author_id !== authorId) {
       return json({ error: "Unauthorized to delete this tab" }, { status: 403 });
+    }
+    if (existing) {
+      const expectedUpdatedAt = readExpectedUpdatedAtHeader(request);
+      if (expectedUpdatedAt !== existing.updated_at) {
+        return conflictResponse(
+          existingTab(tabId, existing),
+          expectedUpdatedAt ? "Tab changed in database" : "Missing expected tab revision",
+        );
+      }
     }
 
     await env.DB.prepare(
       `DELETE FROM tabs
        WHERE id = ?`,
-    ).bind(params.id).run();
+    ).bind(tabId).run();
 
     return json({ ok: true });
   } catch (error) {

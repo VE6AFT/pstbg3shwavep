@@ -22,6 +22,7 @@ export type CachedTabMeta = {
 export type CachedTabLayout = {
   id: string;
   updatedAt?: string;
+  dirtyAt?: string;
   layout: Layout;
 };
 
@@ -60,15 +61,19 @@ export function cachedLayoutForTab(tab: LayoutTab): CachedTabLayout | null {
   return {
     id: tab.id,
     ...(tab.updatedAt ? { updatedAt: tab.updatedAt } : {}),
+    ...(tab.dirtyAt ? { dirtyAt: tab.dirtyAt } : {}),
     layout: tab.layout,
   };
 }
 
 export function isCachedLayoutFresh(
-  metaOrTab: Pick<CachedTabMeta | LayoutTab, "updatedAt">,
+  metaOrTab: Pick<CachedTabMeta | LayoutTab, "dirtyAt" | "syncState" | "updatedAt">,
   cachedLayout: CachedTabLayout | null,
 ): cachedLayout is CachedTabLayout {
   if (!cachedLayout) return false;
+  if (isUnsyncedSyncState(metaOrTab.syncState)) {
+    return Boolean(metaOrTab.dirtyAt) && cachedLayout.dirtyAt === metaOrTab.dirtyAt;
+  }
   return !metaOrTab.updatedAt || cachedLayout.updatedAt === metaOrTab.updatedAt;
 }
 
@@ -87,14 +92,26 @@ export async function readCachedTabs(activeTabId: string | null): Promise<Layout
   if (!db) return [];
 
   const metas = await getAll<CachedTabMeta>(db, TABS_META_STORE);
-  const activeMeta = activeTabId ? metas.find((meta) => meta.id === activeTabId) ?? null : null;
-  const activeLayout = activeMeta ? await get<CachedTabLayout>(db, TAB_LAYOUTS_STORE, activeMeta.id) : null;
+  const hydrateIds = new Set(
+    metas
+      .filter((meta) => shouldHydrateCachedTab(activeTabId, meta))
+      .map((meta) => meta.id),
+  );
+  const layouts = new Map(
+    await Promise.all(
+      Array.from(hydrateIds).map(async (id) => [id, await get<CachedTabLayout>(db, TAB_LAYOUTS_STORE, id)] as const),
+    ),
+  );
 
   return metas.map((meta) => {
     const tab = tabFromCachedMeta(meta);
-    if (meta.id !== activeMeta?.id) return tab;
-    return applyCachedLayout(tab, activeLayout);
+    if (!hydrateIds.has(meta.id)) return tab;
+    return applyCachedLayout(tab, layouts.get(meta.id) ?? null);
   });
+}
+
+export function shouldHydrateCachedTab(activeTabId: string | null, meta: Pick<CachedTabMeta, "id" | "syncState">) {
+  return meta.id === activeTabId || isUnsyncedSyncState(meta.syncState);
 }
 
 export async function readCachedLayout(tabId: string): Promise<CachedTabLayout | null> {
@@ -150,6 +167,15 @@ export async function clearTabCache(): Promise<void> {
 
 function indexedDbAvailable() {
   return typeof indexedDB !== "undefined";
+}
+
+function isUnsyncedSyncState(syncState: SyncState | undefined) {
+  return syncState === "dirty"
+    || syncState === "local-only"
+    || syncState === "draft-clone"
+    || syncState === "saving"
+    || syncState === "error"
+    || syncState === "delete-pending";
 }
 
 function openTabCache(): Promise<IDBDatabase | null> {

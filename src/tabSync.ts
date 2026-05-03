@@ -5,11 +5,19 @@ export type DisketteStatus = "saving" | "dirty" | "synced";
 const FLUSHABLE_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "delete-pending"]);
 const UNSYNCED_SYNC_STATES = new Set<LayoutTab["syncState"]>(["dirty", "local-only", "draft-clone", "saving", "error", "delete-pending"]);
 
+/**
+ * Removes client-side sync metadata from a tab before sending it to the server.
+ * This ensures the database schema remains clean and doesn't store transient local states.
+ */
 export function stripSyncMetadata(tab: LayoutTab): LayoutTab {
   const { syncState: _syncState, dirtyAt: _dirtyAt, syncError: _syncError, ...serverTab } = tab;
   return serverTab;
 }
 
+/**
+ * Returns a copy of the tab marked as fully synchronized.
+ * Resets dirty timestamps and error messages.
+ */
 export function withSyncedState(tab: LayoutTab): LayoutTab {
   return {
     ...tab,
@@ -20,6 +28,7 @@ export function withSyncedState(tab: LayoutTab): LayoutTab {
 }
 
 export function isFlushableTab(tab: LayoutTab) {
+  if ((tab.syncState === "dirty" || tab.syncState === "local-only") && tab.hasLayout === false) return false;
   return FLUSHABLE_SYNC_STATES.has(tab.syncState);
 }
 
@@ -39,16 +48,28 @@ export function visibleTabs(tabs: LayoutTab[]) {
   return tabs.filter((tab) => !isHiddenPendingDelete(tab));
 }
 
+/**
+ * Merges a list of tab summaries from the server with the current local tab state.
+ * 
+ * Logic:
+ * 1. If a local tab is currently being edited (isFlushable), we preserve the local version.
+ * 2. If the server has a newer 'updatedAt' timestamp, we assume the server version is newer 
+ *    and mark the local version as needing a layout re-fetch (hasLayout: false).
+ * 3. Otherwise, we assume the local layout is still valid and just sync the metadata.
+ */
 export function mergeRemoteTabSummaries(remoteTabs: LayoutTab[], currentTabs: LayoutTab[]) {
   const currentById = new Map(currentTabs.map((tab) => [tab.id, tab]));
   const remoteIds = new Set(remoteTabs.map((tab) => tab.id));
   const merged = remoteTabs.map((remote) => {
     const current = currentById.get(remote.id);
 
-    if (current && shouldLocalVersionWin(current, remote)) {
+    if (current && shouldPreserveLocalOnlyVersion(current)) {
       return {
         ...current,
-        syncState: current.syncState === "local-only" ? "dirty" : current.syncState,
+        ...(current.syncState === "local-only" ? { syncState: "dirty" as const, syncError: undefined } : {}),
+        ...(current.syncState === "local-only" && remote.createdAt ? { createdAt: remote.createdAt } : {}),
+        ...(current.syncState === "local-only" && remote.updatedAt ? { updatedAt: remote.updatedAt } : {}),
+        ...(remote.canEdit !== undefined ? { canEdit: remote.canEdit } : {}),
       };
     }
 
@@ -102,16 +123,3 @@ function shouldPreserveLocalOnlyVersion(tab: LayoutTab) {
     || tab.syncState === "delete-pending";
 }
 
-function shouldLocalVersionWin(local: LayoutTab, remote: LayoutTab) {
-  if (!shouldPreserveLocalOnlyVersion(local)) return false;
-  const localTime = parseDateTime(local.dirtyAt);
-  const remoteTime = parseDateTime(remote.updatedAt);
-  if (localTime === null || remoteTime === null) return false;
-  return localTime > remoteTime;
-}
-
-function parseDateTime(value: string | undefined) {
-  if (!value) return null;
-  const time = new Date(value).getTime();
-  return Number.isFinite(time) ? time : null;
-}

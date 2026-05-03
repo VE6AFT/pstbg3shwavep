@@ -93,16 +93,37 @@ describe("remote/local tab sync merge", () => {
     });
   });
 
-  it("lets newer remote summaries win over older or undated local dirty work", () => {
+  it("preserves local dirty work even when a remote summary is newer", () => {
     const remote = makeSummary({ name: "Remote New", updatedAt: "2026-04-30T04:00:00.000Z" });
 
     expect(mergeRemoteTabSummaries([remote], [
       makeTab({ name: "Local Old", syncState: "dirty", dirtyAt: "2026-04-30T03:00:00.000Z" }),
-    ])[0]).toMatchObject({ name: "Remote New", syncState: "synced" });
+    ])[0]).toMatchObject({ name: "Local Old", syncState: "dirty" });
 
     expect(mergeRemoteTabSummaries([remote], [
       makeTab({ name: "Local Undated", syncState: "dirty", dirtyAt: undefined }),
-    ])[0]).toMatchObject({ name: "Remote New", syncState: "synced" });
+    ])[0]).toMatchObject({ name: "Local Undated", syncState: "dirty" });
+  });
+
+  it("adopts a remote base revision when a local-only tab appears remotely", () => {
+    const localOnly = makeTab({
+      id: "tab-local",
+      name: "Offline Clone",
+      syncState: "local-only",
+      dirtyAt: "2026-04-30T03:00:00.000Z",
+    });
+    const remote = makeSummary({
+      id: "tab-local",
+      name: "Offline Clone",
+      updatedAt: "2026-04-30T04:00:00.000Z",
+    });
+
+    expect(mergeRemoteTabSummaries([remote], [localOnly])[0]).toMatchObject({
+      id: "tab-local",
+      syncState: "dirty",
+      updatedAt: "2026-04-30T04:00:00.000Z",
+      layout: localOnly.layout,
+    });
   });
 
   it("keeps newer delete-pending tabs queued and hidden from normal display", () => {
@@ -129,17 +150,9 @@ describe("diskette status", () => {
     expect(getDisketteStatus([makeTab()], true, false)).toBe("synced");
   });
 
-  it("can represent only the active tab instead of every tab", () => {
-    const activeSynced = makeTab({ id: "active", syncState: "synced" });
-    const inactiveDraft = makeTab({ id: "inactive-draft", syncState: "draft-clone" });
-    const inactiveError = makeTab({ id: "inactive-error", syncState: "error", syncError: "Nope" });
-
-    expect(getDisketteStatus([activeSynced], true, false)).toBe("synced");
-    expect(getDisketteStatus([activeSynced, inactiveDraft, inactiveError], true, false)).toBe("dirty");
-  });
-
-  it("still shows dirty for an active draft clone or error", () => {
-    expect(getDisketteStatus([makeTab({ syncState: "draft-clone" })], true, false)).toBe("dirty");
-    expect(getDisketteStatus([makeTab({ syncState: "error", syncError: "Nope" })], true, false)).toBe("dirty");
+  it("does not flush dirty layouts that are only summaries", () => {
+    expect(isFlushableTab(makeSummary({ syncState: "dirty", dirtyAt: "2026-04-30T03:00:00.000Z" }))).toBe(false);
+    expect(isFlushableTab(makeSummary({ syncState: "local-only", dirtyAt: "2026-04-30T03:00:00.000Z" }))).toBe(false);
+    expect(isFlushableTab(makeSummary({ syncState: "delete-pending", dirtyAt: "2026-04-30T03:00:00.000Z" }))).toBe(true);
   });
 });
