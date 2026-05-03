@@ -391,7 +391,8 @@ button {
   cursor: pointer;
 }
 
-.snap-control {
+.snap-control,
+.dims-control {
   cursor: pointer;
 }
 
@@ -422,7 +423,8 @@ button {
   transform: scale(1);
 }
 
-.snap-control.center .snap-checkbox::before {
+.snap-control.center .snap-checkbox::before,
+.dims-control.all .dims-checkbox::before {
   content: "X";
   width: auto;
   height: auto;
@@ -539,9 +541,11 @@ button {
 .delete-zone {
   --delete-zone-center: translateX(-50%);
   --delete-zone-level: 0;
+  --delete-zone-opacity: 0.15;
+  --delete-zone-active: #ef4444;
   position: absolute;
   bottom: 20px;
-  left: 50%;
+  left: calc(50% - 72px);
   transform: var(--delete-zone-center);
   width: 48px;
   height: 48px;
@@ -552,10 +556,15 @@ button {
   border-radius: 999px;
   pointer-events: none;
   user-select: none;
-  opacity: 0.15;
+  opacity: var(--delete-zone-opacity);
   transition: opacity 0.15s ease, transform 0.1s ease;
   z-index: 100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.delete-zone.copy-zone {
+  --delete-zone-active: var(--accent);
+  left: calc(50% + 72px);
 }
 
 .delete-zone::before {
@@ -563,7 +572,7 @@ button {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: #ef4444;
+  background: var(--delete-zone-active);
   opacity: var(--delete-zone-level);
   transition: opacity 0.15s ease;
   pointer-events: none;
@@ -604,7 +613,6 @@ button {
 
 /* Brighten when actively dragging something */
 .workspace:has(.dragging) .delete-zone {
-  opacity: 1;
   pointer-events: all;
 }
 
@@ -684,6 +692,83 @@ button {
   cursor: grabbing;
 }
 
+.tool-node.selected>rect {
+  stroke-width: 2.5;
+  stroke-opacity: 0.95;
+}
+
+.selected-tool-overlay {
+  color: #202427;
+  pointer-events: none;
+}
+
+.dimension-line,
+.dimension-extension {
+  fill: none;
+  stroke: rgba(32, 36, 39, 0.62);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dimension-line {
+  stroke-width: 0.7;
+}
+
+.dimension-extension {
+  stroke-width: 0.55;
+  stroke-dasharray: 2 3;
+}
+
+.dimension-arrow {
+  fill: none;
+  stroke: rgba(32, 36, 39, 0.62);
+  stroke-width: 0.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dimension-label {
+  fill: #202427;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  pointer-events: none;
+}
+
+.rotate-handle {
+  pointer-events: auto;
+  cursor: grab;
+  color: rgba(32, 36, 39, 0.72);
+}
+
+.rotate-handle:active {
+  cursor: grabbing;
+}
+
+.rotate-hit-area {
+  fill: transparent;
+  stroke: none;
+}
+
+.rotate-handle path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.rotate-handle:hover,
+.rotate-handle:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .tool-node foreignObject {
   overflow: hidden;
   pointer-events: none;
@@ -715,6 +800,13 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   pointer-events: none;
+}
+
+.tool-node .dimension-label {
+  fill: #202427;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: none;
 }
 
 .sheet-tabs {
@@ -1133,7 +1225,7 @@ button {
   background: var(--accent);
   width: 100%;
   transform-origin: left;
-  animation: tutorial-total-timer 25s linear forwards;
+  animation: tutorial-total-timer 20s linear forwards;
 }
 
 @keyframes tutorial-total-timer {

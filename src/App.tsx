@@ -40,8 +40,10 @@ const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes we
 const TAB_DELETE_CONFIRM_MS = 3200;
 const TUTORIAL_STEP_MS = 5000;
 const SHARE_FEEDBACK_MS = 1800;
-const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
+const TUTORIAL_STEPS = ["zoom", "delete", "add", "rename"] as const;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
+const DIMS_MODES = ["off", "selected", "all"] as const;
+const ROTATION_SNAP_DEGREES = 5;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
@@ -76,7 +78,7 @@ const STATIC_TOOL_HAZARDS = new Set<NonNullable<ToolShape["hazards"]>[number]>([
 function loadControls() {
   try {
     const raw = localStorage.getItem(CONTROLS_STORAGE_KEY);
-    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; snapMode?: SnapMode; showInfra?: boolean; showMezz?: boolean };
+    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; snapMode?: SnapMode; dimsMode?: DimsMode; showInfra?: boolean; showMezz?: boolean };
   } catch {
     return {};
   }
@@ -101,7 +103,25 @@ type DragState = {
   element: SVGGElement;
   inverseScreenMatrix: DOMMatrix;
   deleteZoneCenter: { x: number; y: number } | null;
+  copyZoneCenter: { x: number; y: number } | null;
   isOverDelete: boolean;
+  isOverCopy: boolean;
+} | null;
+type RotateDragState = {
+  pointerId: number;
+  tabId: string;
+  toolId: string;
+  originalRotation: number;
+  latestRotation: number;
+  startAngle: number;
+  centerX: number;
+  centerY: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  element: SVGGElement;
+  inverseScreenMatrix: DOMMatrix;
 } | null;
 type ViewBox = {
   minX: number;
@@ -123,6 +143,7 @@ type ClonePrompt = {
 } | null;
 type TutorialStep = typeof TUTORIAL_STEPS[number];
 type SnapMode = typeof SNAP_MODES[number];
+type DimsMode = typeof DIMS_MODES[number];
 type ShareStatus = "idle" | "copied" | "failed";
 
 function parseSvgViewBox(markup: string): ViewBox {
@@ -450,8 +471,33 @@ function snapToolPosition(tool: Pick<ToolShape, "width" | "height">, x: number, 
   return clampToolPosition(tool, x, y);
 }
 
+function normalizeRotation(value: number) {
+  return ((value % 360) + 360) % 360;
+}
+
+function snapRotation(value: number) {
+  return normalizeRotation(Math.round(value / ROTATION_SNAP_DEGREES) * ROTATION_SNAP_DEGREES);
+}
+
+function angleDegreesFromCenter(centerX: number, centerY: number, pointX: number, pointY: number) {
+  return Math.atan2(pointY - centerY, pointX - centerX) * 180 / Math.PI;
+}
+
+function actionZoneProximity(clientX: number, clientY: number, center: { x: number; y: number } | null) {
+  if (!center) return { level: 0, isOver: false };
+  const dist = Math.hypot(clientX - center.x, clientY - center.y);
+  return {
+    level: dist < 32 ? 1 : Math.max(0, 1 - dist / 300),
+    isOver: dist < 32,
+  };
+}
+
 function isSnapMode(value: unknown): value is SnapMode {
   return typeof value === "string" && SNAP_MODES.includes(value as SnapMode);
+}
+
+function isDimsMode(value: unknown): value is DimsMode {
+  return typeof value === "string" && DIMS_MODES.includes(value as DimsMode);
 }
 
 function nextSnapMode(mode: SnapMode): SnapMode {
@@ -459,9 +505,20 @@ function nextSnapMode(mode: SnapMode): SnapMode {
   return SNAP_MODES[(index + 1) % SNAP_MODES.length];
 }
 
+function nextDimsMode(mode: DimsMode): DimsMode {
+  const index = DIMS_MODES.indexOf(mode);
+  return DIMS_MODES[(index + 1) % DIMS_MODES.length];
+}
+
 function snapModeLabel(mode: SnapMode) {
   if (mode === "top-left") return "top-left";
   if (mode === "center") return "center";
+  return "off";
+}
+
+function dimsModeLabel(mode: DimsMode) {
+  if (mode === "selected") return "selected";
+  if (mode === "all") return "all";
   return "off";
 }
 
@@ -785,7 +842,11 @@ function App() {
     const mode = loadControls().snapMode;
     return isSnapMode(mode) ? mode : "top-left";
   });
-  const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? false);
+  const [dimsMode, setDimsMode] = useState<DimsMode>(() => {
+    const mode = loadControls().dimsMode;
+    return isDimsMode(mode) ? mode : "selected";
+  });
+  const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? true);
   const [showMezz, setShowMezz] = useState(() => loadControls().showMezz ?? true);
   const debugPanel = useDebugPanel();
   const [showAddTool, setShowAddTool] = useState(false);
@@ -806,8 +867,10 @@ function App() {
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
+  const copyZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
+  const rotateDragState = useRef<RotateDragState>(null);
   const panState = useRef<PanState>(null);
   const syncFlushTimer = useRef<number | null>(null);
   const localWriteTimer = useRef<number | null>(null);
@@ -819,6 +882,7 @@ function App() {
   const [syncInFlight, setSyncInFlight] = useState(false);
   const [tabCreationLimitMessage, setTabCreationLimitMessage] = useState<string | null>(null);
   const deleteProximityRef = useRef(0);
+  const copyProximityRef = useRef(0);
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
   const deferredSyncFlushRef = useRef(false);
@@ -897,15 +961,26 @@ function App() {
     }, 900);
   }, [activeTabId, tabCreationLimitMessage]);
 
+  const paintActionZone = useCallback((zone: HTMLElement | null, level: number, shaking: boolean) => {
+    const clampedLevel = clamp(level, 0, 1);
+    if (!zone) return;
+    zone.style.setProperty("--delete-zone-level", String(clampedLevel));
+    zone.style.setProperty("--delete-zone-opacity", String(0.15 + clampedLevel * 0.85));
+    zone.classList.toggle("shaking", shaking);
+  }, []);
+
   const paintDeleteZone = useCallback((level: number) => {
     const clampedLevel = clamp(level, 0, 1);
     deleteProximityRef.current = clampedLevel;
-    const zone = deleteZoneRef.current;
-    if (!zone) return;
     const visibleLevel = Math.max(clampedLevel, tutorialStep === "delete" ? 1 : 0);
-    zone.style.setProperty("--delete-zone-level", String(visibleLevel));
-    zone.classList.toggle("shaking", clampedLevel === 1);
-  }, [tutorialStep]);
+    paintActionZone(deleteZoneRef.current, visibleLevel, clampedLevel === 1);
+  }, [paintActionZone, tutorialStep]);
+
+  const paintCopyZone = useCallback((level: number) => {
+    const clampedLevel = clamp(level, 0, 1);
+    copyProximityRef.current = clampedLevel;
+    paintActionZone(copyZoneRef.current, clampedLevel, clampedLevel === 1);
+  }, [paintActionZone]);
 
   /**
    * Marks a tab as having unsynced local changes and schedules a background flush.
@@ -1283,9 +1358,9 @@ function App() {
   useEffect(() => {
     localStorage.setItem(
       CONTROLS_STORAGE_KEY,
-      JSON.stringify({ gridDark, snapMode, showInfra, showMezz })
+      JSON.stringify({ gridDark, snapMode, dimsMode, showInfra, showMezz })
     );
-  }, [gridDark, snapMode, showInfra, showMezz]);
+  }, [gridDark, snapMode, dimsMode, showInfra, showMezz]);
 
   const queueCacheSnapshotWrite = useCallback((snapshot: LayoutTab[]) => {
     queuedCacheSnapshotRef.current = snapshot;
@@ -1349,20 +1424,8 @@ function App() {
       return;
     }
 
-    if (event.button === 2 || event.ctrlKey) {
-      setTabs((current) =>
-        current.map((tab) => {
-          if (tab.id !== activeTabId) return tab;
-          return {
-            ...tab,
-            layout: {
-              ...tab.layout,
-              tools: tab.layout.tools.map((t) => (t.id === tool.id ? { ...t, rotation: (t.rotation + 45) % 360 } : t)),
-            },
-          };
-        }),
-      );
-      markTabDirty(activeTabId, "Saving in background");
+    setSelectedToolId(tool.id);
+    if (event.button !== 0) {
       return;
     }
 
@@ -1371,6 +1434,7 @@ function App() {
     const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
     if (!local) return;
     const deleteRect = deleteZoneRef.current?.getBoundingClientRect();
+    const copyRect = copyZoneRef.current?.getBoundingClientRect();
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
@@ -1390,13 +1454,71 @@ function App() {
       deleteZoneCenter: deleteRect
         ? { x: deleteRect.left + deleteRect.width / 2, y: deleteRect.top + deleteRect.height / 2 }
         : null,
+      copyZoneCenter: copyRect
+        ? { x: copyRect.left + copyRect.width / 2, y: copyRect.top + copyRect.height / 2 }
+        : null,
       isOverDelete: false,
+      isOverCopy: false,
     };
-    setSelectedToolId(tool.id);
     setDraggingToolId(tool.id);
   };
 
+  const startToolRotate = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canEdit) {
+      triggerClonePrompt();
+      return;
+    }
+    if (event.button !== 0) return;
+
+    const matrix = svgRef.current?.getScreenCTM()?.inverse();
+    const element = event.currentTarget.closest(".tool-node") as SVGGElement | null;
+    if (!matrix || !element) return;
+
+    const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
+    const centerX = tool.x + tool.width / 2;
+    const centerY = tool.y + tool.height / 2;
+    svgRef.current?.setPointerCapture(event.pointerId);
+    rotateDragState.current = {
+      pointerId: event.pointerId,
+      tabId: activeTabId,
+      toolId: tool.id,
+      originalRotation: normalizeRotation(tool.rotation),
+      latestRotation: normalizeRotation(tool.rotation),
+      startAngle: angleDegreesFromCenter(centerX, centerY, local.x, local.y),
+      centerX,
+      centerY,
+      x: tool.x,
+      y: tool.y,
+      width: tool.width,
+      height: tool.height,
+      element,
+      inverseScreenMatrix: matrix,
+    };
+    setSelectedToolId(tool.id);
+  };
+
   const moveToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rotating = rotateDragState.current;
+    if (rotating && rotating.pointerId === event.pointerId) {
+      const local = svgPointFromMatrix(rotating.inverseScreenMatrix, event.clientX, event.clientY);
+      const nextAngle = angleDegreesFromCenter(rotating.centerX, rotating.centerY, local.x, local.y);
+      const nextRotation = snapRotation(rotating.originalRotation + nextAngle - rotating.startAngle);
+      rotating.latestRotation = nextRotation;
+      rotating.element.setAttribute(
+        "transform",
+        toolTransform({
+          x: rotating.x,
+          y: rotating.y,
+          width: rotating.width,
+          height: rotating.height,
+          rotation: nextRotation,
+        }),
+      );
+      return;
+    }
+
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       const local = svgPointFromMatrix(current.inverseScreenMatrix, event.clientX, event.clientY);
@@ -1416,12 +1538,12 @@ function App() {
         }),
       );
 
-      if (current.deleteZoneCenter) {
-        const dist = Math.hypot(event.clientX - current.deleteZoneCenter.x, event.clientY - current.deleteZoneCenter.y);
-        const nextProximity = dist < 32 ? 1 : Math.max(0, 1 - dist / 300);
-        current.isOverDelete = nextProximity === 1;
-        paintDeleteZone(nextProximity);
-      }
+      const deleteProximity = actionZoneProximity(event.clientX, event.clientY, current.deleteZoneCenter);
+      const copyProximity = actionZoneProximity(event.clientX, event.clientY, current.copyZoneCenter);
+      current.isOverDelete = deleteProximity.isOver;
+      current.isOverCopy = copyProximity.isOver;
+      paintDeleteZone(deleteProximity.level);
+      paintCopyZone(copyProximity.level);
       return;
     }
 
@@ -1439,13 +1561,82 @@ function App() {
   };
 
   const endToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rotating = rotateDragState.current;
+    if (rotating && rotating.pointerId === event.pointerId) {
+      rotateDragState.current = null;
+      svgRef.current?.releasePointerCapture(event.pointerId);
+      if (Math.abs(rotating.latestRotation - rotating.originalRotation) > 0.01) {
+        setTabs((currentTabs) =>
+          currentTabs.map((tab) => {
+            if (tab.id !== rotating.tabId) return tab;
+            return {
+              ...tab,
+              layout: {
+                ...tab.layout,
+                tools: tab.layout.tools.map((tool) =>
+                  tool.id === rotating.toolId
+                    ? {
+                      ...tool,
+                      rotation: rotating.latestRotation,
+                    }
+                    : tool,
+                ),
+              },
+            };
+          }),
+        );
+        markTabDirty(rotating.tabId, "Rotated tool");
+      }
+    }
+
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       dragState.current = null;
       svgRef.current?.releasePointerCapture(event.pointerId);
       setDraggingToolId(null);
 
-      if (current.isOverDelete) {
+      if (current.isOverCopy) {
+        const sourceTab = tabsRef.current.find((tab) => tab.id === current.tabId) ?? activeTab;
+        const sourceTool = sourceTab.layout.tools.find((tool) => tool.id === current.toolId);
+        if (!sourceTool) return;
+        current.element.setAttribute(
+          "transform",
+          toolTransform({
+            x: current.originalX,
+            y: current.originalY,
+            width: current.width,
+            height: current.height,
+            rotation: current.rotation,
+          }),
+        );
+        const nextId = makeShortId("tool", sourceTab.layout.tools.map((tool) => tool.id));
+        const nextPosition = clampToolPosition(
+          current,
+          viewBox.minX + viewBox.width / 2 - current.width / 2,
+          viewBox.minY + viewBox.height / 2 - current.height / 2,
+        );
+        setTabs((currentTabs) =>
+          currentTabs.map((tab) => {
+            if (tab.id !== current.tabId) return tab;
+            return {
+              ...tab,
+              layout: {
+                ...tab.layout,
+                tools: [
+                  ...tab.layout.tools,
+                  {
+                    ...sourceTool,
+                    ...nextPosition,
+                    id: nextId,
+                  },
+                ],
+              },
+            };
+          }),
+        );
+        setSelectedToolId(nextId);
+        markTabDirty(current.tabId, "Copied tool");
+      } else if (current.isOverDelete) {
         setTabs((currentTabs) =>
           currentTabs.map((tab) => {
             if (tab.id !== current.tabId) return tab;
@@ -1490,6 +1681,7 @@ function App() {
         scheduleSyncFlush(0);
       }
       paintDeleteZone(0);
+      paintCopyZone(0);
     }
 
     const pan = panState.current;
@@ -1507,6 +1699,7 @@ function App() {
       if (shouldPromptForClone) triggerClonePrompt();
       return;
     }
+    setSelectedToolId(null);
     if (shouldPromptForClone) {
       triggerClonePrompt();
     }
@@ -1916,6 +2109,17 @@ function App() {
                 />
                 snap
               </label>
+              <label className={`dims-control ${dimsMode}`}>
+                <input
+                  type="checkbox"
+                  className="dims-checkbox"
+                  checked={dimsMode !== "off"}
+                  aria-label={`dims: ${dimsModeLabel(dimsMode)}`}
+                  aria-checked={dimsMode === "all" ? "mixed" : dimsMode !== "off"}
+                  onChange={() => setDimsMode((current) => nextDimsMode(current))}
+                />
+                dims
+              </label>
               <label>
                 <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
                 mezz
@@ -2095,6 +2299,8 @@ function App() {
           <g id="layer-tools" {...{ "inkscape:label": "tools", "inkscape:groupmode": "layer" }}>
             {(activeTabIsStaticNow ? [] : activeTab.layout.tools).map((tool) => {
               const selected = tool.id === selectedToolId;
+              const showToolDims = dimsMode === "all" || (dimsMode === "selected" && selected && canEdit);
+              const showToolOverlay = showToolDims || (selected && canEdit);
               return (
                 <g
                   key={tool.id}
@@ -2175,25 +2381,90 @@ function App() {
                       })()}
                     </g>
                   )}
+                  {showToolOverlay && (
+                    <g className="selected-tool-overlay" aria-label={`Selected controls for ${tool.name}`}>
+                      {showToolDims && (
+                        <g className="dimension-callouts" aria-hidden="true">
+                        <line className="dimension-extension" x1={0} y1={tool.height} x2={0} y2={tool.height + 11} />
+                        <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width} y2={tool.height + 11} />
+                        <line className="dimension-line" x1={0} y1={tool.height + 8} x2={tool.width} y2={tool.height + 8} />
+                        <path className="dimension-arrow" d={`M7 ${tool.height + 5} L0 ${tool.height + 8} L7 ${tool.height + 11}`} />
+                        <path className="dimension-arrow" d={`M${tool.width - 7} ${tool.height + 5} L${tool.width} ${tool.height + 8} L${tool.width - 7} ${tool.height + 11}`} />
+                        <text
+                          className="dimension-label"
+                          x={tool.width / 2}
+                          y={tool.height + 18}
+                          dominantBaseline="middle"
+                          textAnchor="middle"
+                        >
+                          {inchesToFeetInches(tool.width)}
+                        </text>
+
+                        <line className="dimension-extension" x1={tool.width} y1={0} x2={tool.width + 11} y2={0} />
+                        <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width + 11} y2={tool.height} />
+                        <line className="dimension-line" x1={tool.width + 8} y1={0} x2={tool.width + 8} y2={tool.height} />
+                        <path className="dimension-arrow" d={`M${tool.width + 5} 7 L${tool.width + 8} 0 L${tool.width + 11} 7`} />
+                        <path className="dimension-arrow" d={`M${tool.width + 5} ${tool.height - 7} L${tool.width + 8} ${tool.height} L${tool.width + 11} ${tool.height - 7}`} />
+                        <text
+                          className="dimension-label"
+                          x={tool.width + 8}
+                          y={tool.height / 2}
+                          dominantBaseline="middle"
+                          textAnchor="middle"
+                          transform={`rotate(-90 ${tool.width + 8} ${tool.height / 2})`}
+                        >
+                          {inchesToFeetInches(tool.height)}
+                        </text>
+                        </g>
+                      )}
+
+                      {selected && canEdit && (
+                        <g
+                          className="rotate-handle"
+                          transform={`translate(${tool.width} 0)`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Rotate ${tool.name}`}
+                          onPointerDown={(event) => startToolRotate(event, tool)}
+                        >
+                          <circle className="rotate-hit-area" cx={0} cy={0} r={10} />
+                          <path d="M3.5 -4.5 v4 h-4" />
+                          <path d="M3 2.8 A5 5 0 1 1 1.9 -4.2" />
+                        </g>
+                      )}
+                    </g>
+                  )}
                 </g>
               );
             })}
           </g>
         </svg>
         {canEdit && (
-          <div
-            ref={deleteZoneRef}
-            className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
-            aria-label="Drop here to delete"
-          >
-            <svg viewBox="0 0 24 24">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
-          </div>
+          <>
+            <div
+              ref={deleteZoneRef}
+              className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
+              aria-label="Drop here to delete"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            </div>
+            <div
+              ref={copyZoneRef}
+              className="delete-zone copy-zone"
+              aria-label="Drop here to copy"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M8 8h10v10H8Z" />
+                <path d="M6 16H5c-1 0-2-1-2-2V5c0-1 1-2 2-2h9c1 0 2 1 2 2v1" />
+              </svg>
+            </div>
+          </>
         )}
       </section>
 
@@ -2303,18 +2574,6 @@ function App() {
                 <p>Use your mouse wheel to zoom in and out of the drawing.</p>
               </>
             )}
-            {tutorialStep === "rotate" && (
-              <>
-                <div className="tutorial-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M23 4v6h-6" />
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                  </svg>
-                </div>
-                <h3>Right-click to rotate</h3>
-                <p>Right-click (or Ctrl+Click) any object to rotate it 45° clockwise.</p>
-              </>
-            )}
             {tutorialStep === "delete" && (
               <>
                 <div className="tutorial-icon" style={{ color: "#ef4444" }}>
@@ -2356,8 +2615,8 @@ function App() {
               <div className="tutorial-markers" style={{ position: "relative", height: "8px" }}>
                 {TUTORIAL_STEPS.map((step, i) => {
                   const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
-                  // Right to left placement: Zoom at 80%, Rename at 0%
-                  const leftPercent = (4 - i) * 20;
+                  const lastIndex = TUTORIAL_STEPS.length - 1;
+                  const leftPercent = lastIndex === 0 ? 0 : (lastIndex - i) * (100 / lastIndex);
                   return (
                     <div
                       key={step}
