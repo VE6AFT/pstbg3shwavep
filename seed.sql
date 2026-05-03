@@ -6,7 +6,7 @@ INSERT OR IGNORE INTO tabs (
   author_id,
   layout_json
 ) VALUES (
-  'tab-default',
+  'now',
   'Now',
   NULL,
   '{

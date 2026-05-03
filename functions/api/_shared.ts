@@ -4,7 +4,6 @@ export type Env = {
 
 export type ToolShape = {
   id: string;
-  assetId: string;
   name: string;
   x: number;
   y: number;
@@ -12,7 +11,7 @@ export type ToolShape = {
   height: number;
   rotation: number;
   color: string;
-  scope?:
+  activity?:
     | "undefined"
     | "automotive"
     | "blue"
@@ -26,6 +25,7 @@ export type ToolShape = {
     | "red"
     | "social"
     | "software/it"
+    | "storage"
     | "textiles/leather"
     | "training"
     | "wood";
@@ -43,8 +43,6 @@ export type LayoutTab = {
   authorId?: string | null;
   canEdit?: boolean;
   hasLayout?: boolean;
-  clonedFromId?: string | null;
-  clonedFromName?: string | null;
   layout: Layout;
   createdAt?: string;
   updatedAt?: string;
@@ -55,8 +53,6 @@ export type TabRow = {
   name: string;
   author_id?: string | null;
   can_edit?: number | boolean | null;
-  cloned_from_tab_id: string | null;
-  cloned_from_tab_name: string | null;
   layout_json?: string | null;
   created_at: string;
   updated_at: string;
@@ -64,11 +60,10 @@ export type TabRow = {
 
 export const VALIDATION_LIMITS = {
   requestBytes: 256 * 1024,
-  tabIdChars: 96,
+  tabIdChars: 32,
   authorIdChars: 128,
-  tabNameChars: 24,
-  toolIdChars: 96,
-  toolAssetIdChars: 128,
+  tabNameChars: 32,
+  toolIdChars: 32,
   toolNameChars: 40,
   toolsPerTab: 500,
   minCoordinate: -100000,
@@ -80,7 +75,7 @@ export const VALIDATION_LIMITS = {
   hazardsPerTool: 6,
 } as const;
 
-export const STATIC_NOW_TAB_ID = "tab-default";
+export const STATIC_NOW_TAB_ID = "now";
 export const STATIC_NOW_TAB_NAME = "Now";
 export const STATIC_NOW_LAYOUT: Layout = { unit: "in", tools: [] };
 
@@ -95,7 +90,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const TEXT_ENCODER = new TextEncoder();
 const EMPTY_LAYOUT: Layout = { unit: "in", tools: [] };
-const ALLOWED_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
+const ALLOWED_ACTIVITIES = new Set<NonNullable<ToolShape["activity"]>>([
   "undefined",
   "automotive",
   "blue",
@@ -109,6 +104,7 @@ const ALLOWED_SCOPES = new Set<NonNullable<ToolShape["scope"]>>([
   "red",
   "social",
   "software/it",
+  "storage",
   "textiles/leather",
   "training",
   "wood",
@@ -164,8 +160,6 @@ export function readLayoutTab(row: TabRow): LayoutTab {
   const tab: LayoutTab = {
     id: row.id,
     name: row.name,
-    clonedFromId: row.cloned_from_tab_id,
-    clonedFromName: row.cloned_from_tab_name,
     hasLayout,
     layout: hasLayout ? JSON.parse(row.layout_json as string) as Layout : EMPTY_LAYOUT,
     createdAt: row.created_at,
@@ -272,8 +266,6 @@ export function parseLayoutTabValue(value: unknown, path = "tab"): LayoutTab {
     id: readId(tab.id, `${path}.id`, VALIDATION_LIMITS.tabIdChars, details),
     name: readString(tab.name, `${path}.name`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
     authorId: readNullableId(tab.authorId, `${path}.authorId`, VALIDATION_LIMITS.authorIdChars, details),
-    clonedFromId: readNullableId(tab.clonedFromId, `${path}.clonedFromId`, VALIDATION_LIMITS.authorIdChars, details),
-    clonedFromName: readNullableString(tab.clonedFromName, `${path}.clonedFromName`, VALIDATION_LIMITS.tabNameChars, details, { trim: true }),
     layout: {
       unit: "in",
       tools: [],
@@ -310,7 +302,6 @@ function readTool(value: unknown, path: string, details: string[]): ToolShape {
 
   const canonical: ToolShape = {
     id: readId(tool?.id, `${path}.id`, VALIDATION_LIMITS.toolIdChars, details),
-    assetId: readId(tool?.assetId, `${path}.assetId`, VALIDATION_LIMITS.toolAssetIdChars, details),
     name: readString(tool?.name, `${path}.name`, VALIDATION_LIMITS.toolNameChars, details, { trim: true }),
     x: readNumber(tool?.x, `${path}.x`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
     y: readNumber(tool?.y, `${path}.y`, VALIDATION_LIMITS.minCoordinate, VALIDATION_LIMITS.maxCoordinate, details),
@@ -320,8 +311,8 @@ function readTool(value: unknown, path: string, details: string[]): ToolShape {
     color: readColor(tool?.color, `${path}.color`, details),
   };
 
-  if (tool?.scope !== undefined && tool.scope !== null) {
-    canonical.scope = readScope(tool.scope, `${path}.scope`, details);
+  if (tool?.activity !== undefined && tool.activity !== null) {
+    canonical.activity = readActivity(tool.activity, `${path}.activity`, details);
   }
 
   if (tool?.hazards !== undefined && tool.hazards !== null) {
@@ -415,13 +406,13 @@ function readColor(value: unknown, path: string, details: string[]) {
   return color;
 }
 
-function readScope(value: unknown, path: string, details: string[]) {
-  if (typeof value !== "string" || !ALLOWED_SCOPES.has(value as NonNullable<ToolShape["scope"]>)) {
-    details.push(`${path} must be an allowed scope`);
+function readActivity(value: unknown, path: string, details: string[]) {
+  if (typeof value !== "string" || !ALLOWED_ACTIVITIES.has(value as NonNullable<ToolShape["activity"]>)) {
+    details.push(`${path} must be an allowed activity`);
     return "undefined";
   }
 
-  return value as NonNullable<ToolShape["scope"]>;
+  return value as NonNullable<ToolShape["activity"]>;
 }
 
 function readHazards(value: unknown, path: string, details: string[]) {

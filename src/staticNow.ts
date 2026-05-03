@@ -1,12 +1,12 @@
 import type { Layout, LayoutTab } from "./types";
 
-export const NOW_TAB_ID = "tab-default";
+export const NOW_TAB_ID = "now";
 export const NOW_TAB_NAME = "Now";
 
 const EMPTY_LAYOUT: Layout = { unit: "in", tools: [] };
 
 export function isStaticNowTab(tab: Pick<LayoutTab, "id" | "name">) {
-  return tab.id === NOW_TAB_ID || tab.name === NOW_TAB_NAME;
+  return tab.id === NOW_TAB_ID;
 }
 
 export function makeStaticNowTab(layout: Layout = EMPTY_LAYOUT): LayoutTab {
@@ -15,8 +15,6 @@ export function makeStaticNowTab(layout: Layout = EMPTY_LAYOUT): LayoutTab {
     name: NOW_TAB_NAME,
     canEdit: false,
     hasLayout: true,
-    clonedFromId: null,
-    clonedFromName: null,
     syncState: "synced",
     layout,
   };
