@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
   useCallback,
@@ -96,6 +97,10 @@ type KeyboardActivityCallout = {
   toolId: string;
   activity: ActivityKind;
   sequence: number;
+};
+type ToolRenameTarget = {
+  tabId: string;
+  toolId: string;
 };
 
 type DragState = {
@@ -596,6 +601,34 @@ function toolTransform(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "r
   return `translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`;
 }
 
+function toolRenameEditorBox(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "rotation">) {
+  const centerX = tool.x + tool.width / 2;
+  const centerY = tool.y + tool.height / 2;
+  const radians = tool.rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const corners = [
+    { x: tool.x, y: tool.y },
+    { x: tool.x + tool.width, y: tool.y },
+    { x: tool.x + tool.width, y: tool.y + tool.height },
+    { x: tool.x, y: tool.y + tool.height },
+  ].map((corner) => {
+    const dx = corner.x - centerX;
+    const dy = corner.y - centerY;
+    return {
+      x: centerX + dx * cos - dy * sin,
+      y: centerY + dx * sin + dy * cos,
+    };
+  });
+  const width = clamp(Math.max(tool.width, 96), 96, 220);
+  return {
+    x: centerX - width / 2,
+    y: Math.min(...corners.map((corner) => corner.y)) - 34,
+    width,
+    height: 26,
+  };
+}
+
 function isSamePersistedDraft(current: LayoutTab, draft: LayoutTab) {
   return current.name === draft.name
     && current.syncState === draft.syncState
@@ -946,6 +979,8 @@ function App() {
   const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [renamingTool, setRenamingTool] = useState<ToolRenameTarget | null>(null);
+  const [toolRenameDraft, setToolRenameDraft] = useState("");
   const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -954,6 +989,7 @@ function App() {
     copy: null,
   });
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
+  const toolRenameInputRef = useRef<HTMLInputElement | null>(null);
   const dragState = useRef<DragState>(null);
   const rotateDragState = useRef<RotateDragState>(null);
   const panState = useRef<PanState>(null);
@@ -1008,13 +1044,19 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const shouldPromptForClone = !canEdit;
+  const objectShortcutUiBusy = showAddTool || renamingTabId !== null || renamingTool !== null;
   const duplicateSelectedToolRef = useRef<(() => boolean) | null>(null);
   const deleteSelectedToolRef = useRef<(() => boolean) | null>(null);
   const rotateSelectedToolRef = useRef<((delta: number) => boolean) | null>(null);
   const cycleSelectedToolActivityRef = useRef<((step: 1 | -1) => boolean) | null>(null);
+  const renameSelectedToolRef = useRef<(() => boolean) | null>(null);
   const debugPanel = useDebugPanel({
     onKeyDown: (event) => {
-      if (event.defaultPrevented || isTypingTarget(event.target)) return;
+      if (event.defaultPrevented || isTypingTarget(event.target) || objectShortcutUiBusy) return;
+      if (event.key === "Enter") {
+        if (renameSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
       if (event.key === "Insert") {
         if (duplicateSelectedToolRef.current?.()) event.preventDefault();
         return;
@@ -1330,8 +1372,24 @@ function App() {
   useEffect(() => {
     if (!canEdit) {
       setShowAddTool(false);
+      setRenamingTool(null);
+      setToolRenameDraft("");
     }
   }, [activeTabId, canEdit]);
+
+  useEffect(() => {
+    if (!renamingTool) return;
+    if (renamingTool.tabId !== activeTabId || !activeTab.layout.tools.some((tool) => tool.id === renamingTool.toolId)) {
+      setRenamingTool(null);
+      setToolRenameDraft("");
+    }
+  }, [activeTab, activeTabId, renamingTool]);
+
+  useEffect(() => {
+    if (!renamingTool) return;
+    toolRenameInputRef.current?.focus();
+    toolRenameInputRef.current?.select();
+  }, [renamingTool]);
 
   useEffect(() => {
     if (shareFeedbackTimerRef.current) {
@@ -1825,6 +1883,9 @@ function App() {
       if (shouldPromptForClone) triggerClonePrompt();
       return;
     }
+    if (renamingTool) {
+      toolRenameInputRef.current?.blur();
+    }
     setSelectedToolId(null);
     if (shouldPromptForClone) {
       triggerClonePrompt();
@@ -1911,6 +1972,52 @@ function App() {
     return true;
   }, [hasEditableTool]);
 
+  const startToolRename = useCallback((tabId: string, toolId: string) => {
+    if (showAddTool || renamingTabId || !hasEditableTool(tabId, toolId)) return false;
+    const sourceTool = tabsRef.current
+      .find((tab) => tab.id === tabId)
+      ?.layout.tools.find((tool) => tool.id === toolId);
+    if (!sourceTool) return false;
+
+    setSelectedToolId(toolId);
+    setRenamingTool({ tabId, toolId });
+    setToolRenameDraft(sourceTool.name);
+    return true;
+  }, [hasEditableTool, renamingTabId, showAddTool]);
+
+  const cancelToolRename = useCallback(() => {
+    setRenamingTool(null);
+    setToolRenameDraft("");
+  }, []);
+
+  const renameTool = useCallback((tabId: string, toolId: string, nextName: string) => {
+    const trimmed = normalizeToolName(nextName);
+    const sourceTool = tabsRef.current
+      .find((tab) => tab.id === tabId)
+      ?.layout.tools.find((tool) => tool.id === toolId);
+
+    if (!trimmed || !sourceTool) {
+      cancelToolRename();
+      return false;
+    }
+
+    if (trimmed === sourceTool.name) {
+      cancelToolRename();
+      return true;
+    }
+
+    const renamed = updateTool(tabId, toolId, (tool) => ({
+      ...tool,
+      name: trimmed,
+    }));
+    cancelToolRename();
+    if (!renamed) return false;
+
+    markTabDirty(tabId, "Renamed tool");
+    pushDebugEvent("tool renamed");
+    return true;
+  }, [cancelToolRename, markTabDirty, pushDebugEvent, updateTool]);
+
   const duplicateTool = useCallback((tabId: string, toolId: string) => {
     if (!hasEditableTool(tabId, toolId)) return false;
 
@@ -1976,13 +2083,19 @@ function App() {
       }),
     );
     setSelectedToolId((current) => (current === toolId ? null : current));
+    setRenamingTool((current) => (
+      current?.tabId === tabId && current.toolId === toolId ? null : current
+    ));
+    setToolRenameDraft((current) => (
+      renamingTool?.tabId === tabId && renamingTool.toolId === toolId ? "" : current
+    ));
     setKeyboardActivityCallout((current) => (
       current?.tabId === tabId && current.toolId === toolId ? null : current
     ));
     markTabDirty(tabId, ACTION_ZONES.delete.dirtyMessage);
     pushDebugEvent("tool deleted");
     return true;
-  }, [hasEditableTool, markTabDirty, pushDebugEvent]);
+  }, [hasEditableTool, markTabDirty, pushDebugEvent, renamingTool]);
 
   const setToolRotation = useCallback((tabId: string, toolId: string, rotation: number | ((tool: ToolShape) => number), debugMessage?: string) => {
     const updated = updateTool(tabId, toolId, (tool) => ({
@@ -2034,6 +2147,7 @@ function App() {
   deleteSelectedToolRef.current = selectedTool ? () => deleteTool(activeTabId, selectedTool.id) : null;
   rotateSelectedToolRef.current = selectedTool ? (delta) => rotateTool(activeTabId, selectedTool.id, delta) : null;
   cycleSelectedToolActivityRef.current = selectedTool ? (step) => cycleToolActivity(activeTabId, selectedTool.id, step) : null;
+  renameSelectedToolRef.current = selectedTool ? () => startToolRename(activeTabId, selectedTool.id) : null;
 
   const handleCloneTab = async (source: LayoutTab) => {
     if (tabCreationLimitMessage || isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
@@ -2580,9 +2694,12 @@ function App() {
               const activityCallout = keyboardActivityCallout?.tabId === activeTabId && keyboardActivityCallout.toolId === tool.id
                 ? keyboardActivityCallout
                 : null;
+              const toolRenameBox = renamingTool?.tabId === activeTabId && renamingTool.toolId === tool.id
+                ? toolRenameEditorBox(tool)
+                : null;
               return (
+                <Fragment key={tool.id}>
                 <g
-                  key={tool.id}
                   id={tool.id}
                   {...{ "inkscape:label": tool.name }}
                   className={[
@@ -2718,6 +2835,43 @@ function App() {
                     </g>
                   )}
                 </g>
+                  {toolRenameBox && (
+                    <foreignObject
+                      className="tool-rename-editor"
+                      x={toolRenameBox.x}
+                      y={toolRenameBox.y}
+                      width={toolRenameBox.width}
+                      height={toolRenameBox.height}
+                    >
+                      <div className="tool-rename-shell">
+                        <input
+                          ref={toolRenameInputRef}
+                          className="tool-rename-input"
+                          value={toolRenameDraft}
+                          autoFocus
+                          maxLength={MAX_TOOL_NAME_CHARS}
+                          aria-label={`Rename ${tool.name}`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => event.stopPropagation()}
+                          onWheel={(event) => event.stopPropagation()}
+                          onChange={(event) => setToolRenameDraft(event.target.value.slice(0, MAX_TOOL_NAME_CHARS))}
+                          onBlur={() => renameTool(activeTabId, tool.id, toolRenameDraft)}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              renameTool(activeTabId, tool.id, toolRenameDraft);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelToolRename();
+                            }
+                          }}
+                        />
+                      </div>
+                    </foreignObject>
+                  )}
+                </Fragment>
               );
             })}
           </g>
