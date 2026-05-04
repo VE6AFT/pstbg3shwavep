@@ -39,6 +39,7 @@ const DEFAULT_SAVE_DELAY_MS = 5000;
 const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
 const TAB_DELETE_CONFIRM_MS = 2200;
 const SHARE_FEEDBACK_MS = 1800;
+const KEYBOARD_ACTIVITY_CALLOUT_MS = 1400;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
 const DIMS_MODES = ["off", "selected", "all"] as const;
 const ROTATION_SNAP_DEGREES = 5;
@@ -89,6 +90,13 @@ const ACTION_ZONE_DROP_PRIORITY = ["copy", "delete"] as const;
 
 type ActionZoneKind = typeof ACTION_ZONE_KINDS[number];
 type ActionZoneCenter = { x: number; y: number } | null;
+type ActivityKind = NonNullable<ToolShape["activity"]>;
+type KeyboardActivityCallout = {
+  tabId: string;
+  toolId: string;
+  activity: ActivityKind;
+  sequence: number;
+};
 
 type DragState = {
   pointerId: number;
@@ -124,6 +132,15 @@ type RotateDragState = {
   element: SVGGElement;
   inverseScreenMatrix: DOMMatrix;
 } | null;
+const TOOL_LABEL_TEXT_PROPS = {
+  dominantBaseline: "middle",
+  textAnchor: "middle",
+  fill: "#202427",
+  fontSize: 12,
+  fontWeight: 800,
+  fontFamily: "sans-serif",
+  style: { pointerEvents: "none", userSelect: "none" },
+} as const;
 type ViewBox = {
   minX: number;
   minY: number;
@@ -514,6 +531,29 @@ function actionZoneProximity(clientX: number, clientY: number, center: { x: numb
   };
 }
 
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tagName = target.tagName;
+  return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+}
+
+function nextActivity(activity: ToolShape["activity"], step: 1 | -1) {
+  const currentActivity = activity ?? "undefined";
+  const currentIndex = ACTIVITY_ORDER.indexOf(currentActivity);
+  const startIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (startIndex + step + ACTIVITY_ORDER.length) % ACTIVITY_ORDER.length;
+  return ACTIVITY_ORDER[nextIndex];
+}
+
+function toolActionKey(tabId: string, toolId: string) {
+  return `${tabId}:${toolId}`;
+}
+
+function allToolIds(tabs: LayoutTab[]) {
+  return tabs.flatMap((tab) => tab.layout.tools.map((tool) => tool.id));
+}
+
 function isSnapMode(value: unknown): value is SnapMode {
   return typeof value === "string" && SNAP_MODES.includes(value as SnapMode);
 }
@@ -804,6 +844,7 @@ const ACTIVITY_COLORS = {
   green: "#00ff00",
   blue: "#0000ff",
 } as const;
+const ACTIVITY_ORDER = Object.keys(ACTIVITY_COLORS) as Array<keyof typeof ACTIVITY_COLORS>;
 
 function DisketteStatusIcon({
   status,
@@ -891,7 +932,6 @@ function App() {
   });
   const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? true);
   const [showMezz, setShowMezz] = useState(() => loadControls().showMezz ?? true);
-  const debugPanel = useDebugPanel();
   const [showAddTool, setShowAddTool] = useState(false);
   const [addToolForm, setAddToolForm] = useState({
     name: "",
@@ -923,6 +963,7 @@ function App() {
   const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
   const [renameTipAnchor, setRenameTipAnchor] = useState<{ left: number; top: number } | null>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
+  const [keyboardActivityCallout, setKeyboardActivityCallout] = useState<KeyboardActivityCallout | null>(null);
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
@@ -932,6 +973,8 @@ function App() {
     copy: 0,
   });
   const tabsRef = useRef<LayoutTab[]>(tabs);
+  const issuedToolIdsRef = useRef<Set<string>>(new Set());
+  const pendingDeletedToolIdsRef = useRef<Set<string>>(new Set());
   const syncInFlightRef = useRef(false);
   const deferredSyncFlushRef = useRef(false);
   const cacheWriteInFlightRef = useRef(false);
@@ -939,6 +982,9 @@ function App() {
   const flashTimerRef = useRef<number | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const shareFeedbackTimerRef = useRef<number | null>(null);
+  const keyboardActivityCalloutTimerRef = useRef<number | null>(null);
+  const pendingKeyboardActivityCalloutRef = useRef<Omit<KeyboardActivityCallout, "activity"> | null>(null);
+  const keyboardActivityCalloutSequenceRef = useRef(0);
   const sharedTabUrlCleanedRef = useRef(false);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
@@ -962,6 +1008,38 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const shouldPromptForClone = !canEdit;
+  const duplicateSelectedToolRef = useRef<(() => boolean) | null>(null);
+  const deleteSelectedToolRef = useRef<(() => boolean) | null>(null);
+  const rotateSelectedToolRef = useRef<((delta: number) => boolean) | null>(null);
+  const cycleSelectedToolActivityRef = useRef<((step: 1 | -1) => boolean) | null>(null);
+  const debugPanel = useDebugPanel({
+    onKeyDown: (event) => {
+      if (event.defaultPrevented || isTypingTarget(event.target)) return;
+      if (event.key === "Insert") {
+        if (duplicateSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (deleteSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
+      if (event.key === "PageUp") {
+        if (rotateSelectedToolRef.current?.(-45)) event.preventDefault();
+        return;
+      }
+      if (event.key === "PageDown") {
+        if (rotateSelectedToolRef.current?.(45)) event.preventDefault();
+        return;
+      }
+      if (event.key === "Home") {
+        if (cycleSelectedToolActivityRef.current?.(-1)) event.preventDefault();
+        return;
+      }
+      if (event.key === "End") {
+        if (cycleSelectedToolActivityRef.current?.(1)) event.preventDefault();
+      }
+    },
+  });
   const pushDebugEvent = debugPanel.pushEvent;
   const syncErrorTab = activeTab?.syncError
     ? activeTab
@@ -1279,6 +1357,9 @@ function App() {
     if (localWriteTimer.current) {
       window.clearTimeout(localWriteTimer.current);
     }
+    if (keyboardActivityCalloutTimerRef.current) {
+      window.clearTimeout(keyboardActivityCalloutTimerRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -1425,6 +1506,34 @@ function App() {
   useEffect(() => {
     tabsRef.current = tabs;
     localAuthorTabCountRef.current = countClientAuthorTabs(tabs, localUserId);
+    const liveToolKeys = new Set(tabs.flatMap((tab) => tab.layout.tools.map((tool) => toolActionKey(tab.id, tool.id))));
+    pendingDeletedToolIdsRef.current.forEach((key) => {
+      if (!liveToolKeys.has(key)) pendingDeletedToolIdsRef.current.delete(key);
+    });
+
+    const pendingCallout = pendingKeyboardActivityCalloutRef.current;
+    if (!pendingCallout) return;
+
+    const calloutTool = tabs
+      .find((tab) => tab.id === pendingCallout.tabId)
+      ?.layout.tools.find((tool) => tool.id === pendingCallout.toolId);
+    pendingKeyboardActivityCalloutRef.current = null;
+    if (!calloutTool) return;
+
+    if (keyboardActivityCalloutTimerRef.current) {
+      window.clearTimeout(keyboardActivityCalloutTimerRef.current);
+    }
+
+    setKeyboardActivityCallout({
+      ...pendingCallout,
+      activity: calloutTool.activity ?? "undefined",
+    });
+    keyboardActivityCalloutTimerRef.current = window.setTimeout(() => {
+      keyboardActivityCalloutTimerRef.current = null;
+      setKeyboardActivityCallout((current) => (
+        current?.sequence === pendingCallout.sequence ? null : current
+      ));
+    }, KEYBOARD_ACTIVITY_CALLOUT_MS);
   }, [localUserId, tabs]);
 
   useEffect(() => {
@@ -1644,26 +1753,7 @@ function App() {
       rotateDragState.current = null;
       svgRef.current?.releasePointerCapture(event.pointerId);
       if (Math.abs(rotating.latestRotation - rotating.originalRotation) > 0.01) {
-        setTabs((currentTabs) =>
-          currentTabs.map((tab) => {
-            if (tab.id !== rotating.tabId) return tab;
-            return {
-              ...tab,
-              layout: {
-                ...tab.layout,
-                tools: tab.layout.tools.map((tool) =>
-                  tool.id === rotating.toolId
-                    ? {
-                      ...tool,
-                      rotation: rotating.latestRotation,
-                    }
-                    : tool,
-                ),
-              },
-            };
-          }),
-        );
-        markTabDirty(rotating.tabId, "Rotated tool");
+        setToolRotation(rotating.tabId, rotating.toolId, rotating.latestRotation);
       }
     }
 
@@ -1674,9 +1764,6 @@ function App() {
       setDraggingToolId(null);
 
       if (current.activeActionZone === "copy") {
-        const sourceTab = tabsRef.current.find((tab) => tab.id === current.tabId) ?? activeTab;
-        const sourceTool = sourceTab.layout.tools.find((tool) => tool.id === current.toolId);
-        if (!sourceTool) return;
         current.element.setAttribute(
           "transform",
           toolTransform({
@@ -1687,47 +1774,9 @@ function App() {
             rotation: current.rotation,
           }),
         );
-        const nextId = makeShortId("tool", sourceTab.layout.tools.map((tool) => tool.id));
-        const nextPosition = clampToolPosition(
-          current,
-          viewBox.minX + viewBox.width / 2 - current.width / 2,
-          viewBox.minY + viewBox.height / 2 - current.height / 2,
-        );
-        setTabs((currentTabs) =>
-          currentTabs.map((tab) => {
-            if (tab.id !== current.tabId) return tab;
-            return {
-              ...tab,
-              layout: {
-                ...tab.layout,
-                tools: [
-                  ...tab.layout.tools,
-                  {
-                    ...sourceTool,
-                    ...nextPosition,
-                    id: nextId,
-                  },
-                ],
-              },
-            };
-          }),
-        );
-        setSelectedToolId(nextId);
-        markTabDirty(current.tabId, ACTION_ZONES.copy.dirtyMessage);
+        duplicateTool(current.tabId, current.toolId);
       } else if (current.activeActionZone === "delete") {
-        setTabs((currentTabs) =>
-          currentTabs.map((tab) => {
-            if (tab.id !== current.tabId) return tab;
-            return {
-              ...tab,
-              layout: {
-                ...tab.layout,
-                tools: tab.layout.tools.filter((tool) => tool.id !== current.toolId),
-              },
-            };
-          })
-        );
-        markTabDirty(current.tabId, ACTION_ZONES.delete.dirtyMessage);
+        deleteTool(current.tabId, current.toolId);
       } else {
         const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
         if (moved) {
@@ -1836,6 +1885,155 @@ function App() {
       draggingToolId ? "dragging" : "ready",
     ];
   }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
+
+  const hasEditableTool = useCallback((tabId: string, toolId: string) => {
+    if (!canEdit) return false;
+    if (pendingDeletedToolIdsRef.current.has(toolActionKey(tabId, toolId))) return false;
+    const sourceTab = tabsRef.current.find((tab) => tab.id === tabId);
+    return Boolean(sourceTab?.layout.tools.some((tool) => tool.id === toolId));
+  }, [canEdit]);
+
+  const updateTool = useCallback((tabId: string, toolId: string, updater: (tool: ToolShape) => ToolShape) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: tab.layout.tools.map((tool) => (tool.id === toolId ? updater(tool) : tool)),
+          },
+        };
+      }),
+    );
+    return true;
+  }, [hasEditableTool]);
+
+  const duplicateTool = useCallback((tabId: string, toolId: string) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    const nextId = makeShortId("tool", [
+      ...allToolIds(tabsRef.current),
+      ...Array.from(issuedToolIdsRef.current),
+    ]);
+    issuedToolIdsRef.current.add(nextId);
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        const sourceTool = tab.layout.tools.find((tool) => tool.id === toolId);
+        if (!sourceTool) return tab;
+
+        const nextPosition = clampToolPosition(
+          sourceTool,
+          viewBox.minX + viewBox.width / 2 - sourceTool.width / 2,
+          viewBox.minY + viewBox.height / 2 - sourceTool.height / 2,
+        );
+
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: [
+              ...tab.layout.tools,
+              {
+                ...sourceTool,
+                ...nextPosition,
+                id: nextId,
+              },
+            ],
+          },
+        };
+      }),
+    );
+    setSelectedToolId(nextId);
+    markTabDirty(tabId, ACTION_ZONES.copy.dirtyMessage);
+    pushDebugEvent("tool copied");
+    return true;
+  }, [hasEditableTool, markTabDirty, pushDebugEvent, viewBox]);
+
+  const deleteTool = useCallback((tabId: string, toolId: string) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    pendingDeletedToolIdsRef.current.add(toolActionKey(tabId, toolId));
+    const pendingCallout = pendingKeyboardActivityCalloutRef.current;
+    if (pendingCallout?.tabId === tabId && pendingCallout.toolId === toolId) {
+      pendingKeyboardActivityCalloutRef.current = null;
+    }
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: tab.layout.tools.filter((tool) => tool.id !== toolId),
+          },
+        };
+      }),
+    );
+    setSelectedToolId((current) => (current === toolId ? null : current));
+    setKeyboardActivityCallout((current) => (
+      current?.tabId === tabId && current.toolId === toolId ? null : current
+    ));
+    markTabDirty(tabId, ACTION_ZONES.delete.dirtyMessage);
+    pushDebugEvent("tool deleted");
+    return true;
+  }, [hasEditableTool, markTabDirty, pushDebugEvent]);
+
+  const setToolRotation = useCallback((tabId: string, toolId: string, rotation: number | ((tool: ToolShape) => number), debugMessage?: string) => {
+    const updated = updateTool(tabId, toolId, (tool) => ({
+      ...tool,
+      rotation: normalizeRotation(typeof rotation === "function" ? rotation(tool) : rotation),
+    }));
+    if (!updated) return false;
+
+    markTabDirty(tabId, "Rotated tool");
+    if (debugMessage) pushDebugEvent(debugMessage);
+    return true;
+  }, [markTabDirty, pushDebugEvent, updateTool]);
+
+  const rotateTool = useCallback((tabId: string, toolId: string, delta: number) => {
+    const rotated = setToolRotation(
+      tabId,
+      toolId,
+      (tool) => tool.rotation + delta,
+      `tool rotated ${delta < 0 ? "ccw" : "cw"}`,
+    );
+    if (!rotated) return false;
+
+    return true;
+  }, [setToolRotation]);
+
+  const cycleToolActivity = useCallback((tabId: string, toolId: string, step: 1 | -1) => {
+    const updated = updateTool(tabId, toolId, (tool) => {
+      const activity = nextActivity(tool.activity, step);
+      return {
+        ...tool,
+        activity,
+        color: ACTIVITY_COLORS[activity],
+      };
+    });
+    if (!updated) return false;
+
+    keyboardActivityCalloutSequenceRef.current += 1;
+    pendingKeyboardActivityCalloutRef.current = {
+      tabId,
+      toolId,
+      sequence: keyboardActivityCalloutSequenceRef.current,
+    };
+    markTabDirty(tabId, "Changed tool activity");
+    pushDebugEvent(`tool activity ${step < 0 ? "prev" : "next"}`);
+    return true;
+  }, [markTabDirty, pushDebugEvent, updateTool]);
+
+  duplicateSelectedToolRef.current = selectedTool ? () => duplicateTool(activeTabId, selectedTool.id) : null;
+  deleteSelectedToolRef.current = selectedTool ? () => deleteTool(activeTabId, selectedTool.id) : null;
+  rotateSelectedToolRef.current = selectedTool ? (delta) => rotateTool(activeTabId, selectedTool.id, delta) : null;
+  cycleSelectedToolActivityRef.current = selectedTool ? (step) => cycleToolActivity(activeTabId, selectedTool.id, step) : null;
 
   const handleCloneTab = async (source: LayoutTab) => {
     if (tabCreationLimitMessage || isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
@@ -2379,6 +2577,9 @@ function App() {
               const selected = tool.id === selectedToolId;
               const showToolDims = dimsMode === "all" || (dimsMode === "selected" && selected && canEdit);
               const showToolOverlay = showToolDims || (selected && canEdit);
+              const activityCallout = keyboardActivityCallout?.tabId === activeTabId && keyboardActivityCallout.toolId === tool.id
+                ? keyboardActivityCallout
+                : null;
               return (
                 <g
                   key={tool.id}
@@ -2399,19 +2600,23 @@ function App() {
                 >
                   <rect width={tool.width} height={tool.height} rx={0} fill={tool.color} fillOpacity={0.12} stroke={tool.color} strokeWidth={1.5} />
                   <text
+                    {...TOOL_LABEL_TEXT_PROPS}
                     x={tool.width / 2}
                     y={tool.height / 2}
-                    dominantBaseline="middle"
-                    textAnchor="middle"
-                    fill="#202427"
-                    fontSize={12}
-                    fontWeight={800}
-                    fontFamily="sans-serif"
                     transform={tool.height > tool.width ? `rotate(-90, ${tool.width / 2}, ${tool.height / 2})` : undefined}
-                    style={{ pointerEvents: "none", userSelect: "none" }}
                   >
                     {tool.name}
                   </text>
+                  {activityCallout && (
+                    <text
+                      {...TOOL_LABEL_TEXT_PROPS}
+                      className="activity-keyboard-callout"
+                      x={tool.width / 2}
+                      y={-10}
+                    >
+                      {activityCallout.activity}
+                    </text>
+                  )}
                   {tool.hazards && tool.hazards.length > 0 && (
                     <g id={`${tool.id}-hazards`} {...{ "inkscape:label": "hazards" }}>
                       {(() => {
@@ -2660,6 +2865,29 @@ function App() {
           <div className="tutorial-tip drop-tip">
             <strong>Drop here</strong>
             <span>to delete or copy</span>
+          </div>
+
+          <div className="tutorial-tip shortcuts-tip">
+            <strong>Keyboard shortcuts</strong>
+            <span>With an object selected,</span>
+            <dl className="tutorial-shortcuts">
+              <div>
+                <dt>Insert</dt>
+                <dd>copy</dd>
+              </div>
+              <div>
+                <dt>Del/Bkspc</dt>
+                <dd>delete</dd>
+              </div>
+              <div>
+                <dt>PgUp/PgDn</dt>
+                <dd>rotate</dd>
+              </div>
+              <div>
+                <dt>Home/End</dt>
+                <dd>change activity</dd>
+              </div>
+            </dl>
           </div>
 
           <div
