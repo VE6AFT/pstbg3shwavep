@@ -127,8 +127,8 @@ type PinchGestureState = {
   pointerIds: [number, number];
   startDistance: number;
   startViewBox: ViewBox;
-  anchorRatioX: number;
-  anchorRatioY: number;
+  anchorX: number;
+  anchorY: number;
 };
 type GestureState = PanGestureState | PinchGestureState | null;
 type ClonePrompt = {
@@ -514,6 +514,43 @@ function pointerMidpoint(a: GesturePointer, b: GesturePointer) {
   };
 }
 
+function svgRenderBox(rect: DOMRect, viewBox: ViewBox) {
+  const scale = Math.min(rect.width / viewBox.width, rect.height / viewBox.height);
+  const width = viewBox.width * scale;
+  const height = viewBox.height * scale;
+  return {
+    scale,
+    offsetX: (rect.width - width) / 2,
+    offsetY: (rect.height - height) / 2,
+  };
+}
+
+function svgPointFromClient(rect: DOMRect, viewBox: ViewBox, clientX: number, clientY: number) {
+  const renderBox = svgRenderBox(rect, viewBox);
+  return {
+    x: viewBox.minX + (clientX - rect.left - renderBox.offsetX) / renderBox.scale,
+    y: viewBox.minY + (clientY - rect.top - renderBox.offsetY) / renderBox.scale,
+  };
+}
+
+function viewBoxForClientAnchor(
+  rect: DOMRect,
+  width: number,
+  height: number,
+  anchorX: number,
+  anchorY: number,
+  clientX: number,
+  clientY: number,
+) {
+  const renderBox = svgRenderBox(rect, { minX: 0, minY: 0, width, height });
+  return {
+    minX: anchorX - (clientX - rect.left - renderBox.offsetX) / renderBox.scale,
+    minY: anchorY - (clientY - rect.top - renderBox.offsetY) / renderBox.scale,
+    width,
+    height,
+  };
+}
+
 function clampViewBox(viewBox: ViewBox): ViewBox {
   const width = clamp(viewBox.width, MIN_ZOOM_WIDTH, FULL_VIEWBOX.width);
   const height = clamp(viewBox.height, MIN_ZOOM_HEIGHT, FULL_VIEWBOX.height);
@@ -825,6 +862,7 @@ function App() {
   const [draggingToolId, setDraggingToolId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [viewBox, setViewBox] = useState<ViewBox>(FULL_VIEWBOX);
+  const viewBoxRef = useRef<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
@@ -976,13 +1014,10 @@ function App() {
     return point.matrixTransform(matrix.inverse());
   }, []);
 
-  const getSvgClientRatio = useCallback((clientX: number, clientY: number) => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0 || rect.height === 0) return null;
-    return {
-      x: (clientX - rect.left) / rect.width,
-      y: (clientY - rect.top) / rect.height,
-    };
+  const updateViewBox = useCallback((next: ViewBox) => {
+    const clamped = clampViewBox(next);
+    viewBoxRef.current = clamped;
+    setViewBox(clamped);
   }, []);
 
   const cancelToolDragInteraction = useCallback(() => {
@@ -1011,12 +1046,12 @@ function App() {
       pointerId,
       startClientX: clientX,
       startClientY: clientY,
-      startViewBox: viewBox,
+      startViewBox: viewBoxRef.current,
       svgWidth: rect.width,
       svgHeight: rect.height,
     };
     setIsPanning(true);
-  }, [viewBox]);
+  }, []);
 
   const startPinchGesture = useCallback(() => {
     const entries = Array.from(activeTouchPointersRef.current.entries());
@@ -1024,22 +1059,24 @@ function App() {
 
     const [[firstId, firstPointer], [secondId, secondPointer]] = entries;
     const midpoint = pointerMidpoint(firstPointer, secondPointer);
-    const anchor = getSvgPoint(midpoint.clientX, midpoint.clientY);
+    const rect = svgRef.current?.getBoundingClientRect();
+    const currentViewBox = viewBoxRef.current;
     const startDistance = pointerDistance(firstPointer, secondPointer);
-    if (!anchor || startDistance <= 0) return false;
+    if (!rect || startDistance <= 0) return false;
+    const anchor = svgPointFromClient(rect, currentViewBox, midpoint.clientX, midpoint.clientY);
 
     cancelToolDragInteraction();
     gestureState.current = {
       type: "pinch",
       pointerIds: [firstId, secondId],
       startDistance,
-      startViewBox: viewBox,
-      anchorRatioX: (anchor.x - viewBox.minX) / viewBox.width,
-      anchorRatioY: (anchor.y - viewBox.minY) / viewBox.height,
+      startViewBox: currentViewBox,
+      anchorX: anchor.x,
+      anchorY: anchor.y,
     };
     setIsPanning(false);
     return true;
-  }, [cancelToolDragInteraction, getSvgPoint, viewBox]);
+  }, [cancelToolDragInteraction]);
 
   /**
    * The core background sync loop.
@@ -1432,6 +1469,10 @@ function App() {
     });
   }, [activeTabId, tabs.length]);
 
+  useEffect(() => {
+    viewBoxRef.current = viewBox;
+  }, [viewBox]);
+
   const startToolDrag = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1514,20 +1555,21 @@ function App() {
       if (!firstPointer || !secondPointer) return;
 
       const midpoint = pointerMidpoint(firstPointer, secondPointer);
-      const ratio = getSvgClientRatio(midpoint.clientX, midpoint.clientY);
-      if (!ratio) return;
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return;
 
       const scale = pointerDistance(firstPointer, secondPointer) / gesture.startDistance;
       const nextWidth = clamp(gesture.startViewBox.width / scale, MIN_ZOOM_WIDTH, FULL_VIEWBOX.width);
       const nextHeight = clamp(gesture.startViewBox.height / scale, MIN_ZOOM_HEIGHT, FULL_VIEWBOX.height);
-      const anchorX = gesture.startViewBox.minX + gesture.anchorRatioX * gesture.startViewBox.width;
-      const anchorY = gesture.startViewBox.minY + gesture.anchorRatioY * gesture.startViewBox.height;
-      setViewBox(clampViewBox({
-        minX: anchorX - ratio.x * nextWidth,
-        minY: anchorY - ratio.y * nextHeight,
-        width: nextWidth,
-        height: nextHeight,
-      }));
+      updateViewBox(viewBoxForClientAnchor(
+        rect,
+        nextWidth,
+        nextHeight,
+        gesture.anchorX,
+        gesture.anchorY,
+        midpoint.clientX,
+        midpoint.clientY,
+      ));
       return;
     }
 
@@ -1562,13 +1604,11 @@ function App() {
     if (gesture?.type !== "pan" || gesture.pointerId !== event.pointerId) return;
     const dx = (event.clientX - gesture.startClientX) * (gesture.startViewBox.width / gesture.svgWidth);
     const dy = (event.clientY - gesture.startClientY) * (gesture.startViewBox.height / gesture.svgHeight);
-    setViewBox(
-      clampViewBox({
-        ...gesture.startViewBox,
-        minX: gesture.startViewBox.minX - dx,
-        minY: gesture.startViewBox.minY - dy,
-      }),
-    );
+    updateViewBox({
+      ...gesture.startViewBox,
+      minX: gesture.startViewBox.minX - dx,
+      minY: gesture.startViewBox.minY - dy,
+    });
   };
 
   const endToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -1692,12 +1732,14 @@ function App() {
       const anchorX = (local.x - current.minX) / current.width;
       const anchorY = (local.y - current.minY) / current.height;
 
-      return clampViewBox({
+      const next = clampViewBox({
         minX: local.x - anchorX * nextWidth,
         minY: local.y - anchorY * nextHeight,
         width: nextWidth,
         height: nextHeight,
       });
+      viewBoxRef.current = next;
+      return next;
     });
   };
 

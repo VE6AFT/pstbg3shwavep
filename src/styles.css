@@ -40,6 +40,8 @@ button {
   grid-template-rows: minmax(0, 1fr) 72px;
   width: 100vw;
   height: 100vh;
+  height: 100svh;
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: #fbfaf6;
@@ -68,6 +70,8 @@ button {
   grid-template-rows: minmax(0, 1fr) 68px;
   width: 100vw;
   height: 100vh;
+  height: 100svh;
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: #fbfaf6;
