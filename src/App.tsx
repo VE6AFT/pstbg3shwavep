@@ -921,6 +921,7 @@ function App() {
   const localWriteTimer = useRef<number | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
+  const [renameTipAnchor, setRenameTipAnchor] = useState<{ left: number; top: number } | null>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -983,6 +984,20 @@ function App() {
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
+  }, []);
+
+  const updateRenameTipAnchor = useCallback(() => {
+    const element = activeTabButtonRef.current;
+    if (!element) {
+      setRenameTipAnchor(null);
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    setRenameTipAnchor({
+      left: rect.left + rect.width * 0.76,
+      top: rect.top + rect.height * 0.24,
+    });
   }, []);
 
   const setActionZoneElement = useCallback((kind: ActionZoneKind, element: HTMLDivElement | null) => {
@@ -1205,6 +1220,34 @@ function App() {
     if (!tutorialStep) return;
     setShowAddTool(true);
   }, [tutorialStep]);
+
+  useEffect(() => {
+    if (!isTutorialActive) {
+      setRenameTipAnchor(null);
+      return;
+    }
+
+    let animationFrame: number | null = null;
+    const scheduleAnchorUpdate = () => {
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        updateRenameTipAnchor();
+      });
+    };
+
+    scheduleAnchorUpdate();
+    window.addEventListener("resize", scheduleAnchorUpdate);
+    window.addEventListener("scroll", scheduleAnchorUpdate, true);
+
+    return () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      window.removeEventListener("resize", scheduleAnchorUpdate);
+      window.removeEventListener("scroll", scheduleAnchorUpdate, true);
+    };
+  }, [activeTabId, isTutorialActive, tabs.length, updateRenameTipAnchor]);
 
   useEffect(() => {
     if (!canEdit) {
@@ -2619,7 +2662,10 @@ function App() {
             <span>to delete or copy</span>
           </div>
 
-          <div className="tutorial-tip rename-tip">
+          <div
+            className="tutorial-tip rename-tip"
+            style={renameTipAnchor ? { left: renameTipAnchor.left, top: renameTipAnchor.top } : undefined}
+          >
             <strong>Rename tab</strong>
             <span>label your new space</span>
           </div>

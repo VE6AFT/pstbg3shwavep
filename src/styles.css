@@ -1233,16 +1233,13 @@ button {
 }
 
 .rename-tip {
-  bottom: 75px;
+  --tip-base-transform: translate(-35%, -100%);
+  position: fixed;
+  top: calc(100vh - 76px);
   left: 250px;
-}
-
-@media (max-width: 800px) {
-  .rename-tip {
-    left: auto;
-    right: 20px;
-    transform: none;
-  }
+  bottom: auto;
+  transform: translate(-35%, -100%);
+  z-index: 1001;
 }
 
 @keyframes tip-in {
