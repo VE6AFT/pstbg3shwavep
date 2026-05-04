@@ -538,17 +538,14 @@ button {
   cursor: default;
 }
 
-.delete-zone {
-  --delete-zone-center: translateX(-50%);
-  --delete-zone-level: 0;
-  --delete-zone-opacity: 0.15;
-  --delete-zone-active: #ef4444;
-  --delete-zone-pulse-shadow: rgba(239, 68, 68, 0.42);
-  --delete-zone-pulse-fade: rgba(239, 68, 68, 0);
+.action-zone {
+  --action-zone-center: translateX(-50%);
+  --action-zone-level: 0;
+  --action-zone-opacity: 0.2;
+  --action-zone-resting-opacity: 0.2;
   position: absolute;
   bottom: 20px;
-  left: calc(50% - 72px);
-  transform: var(--delete-zone-center);
+  transform: var(--action-zone-center);
   width: 48px;
   height: 48px;
   background: #cbd5e1;
@@ -558,31 +555,38 @@ button {
   border-radius: 999px;
   pointer-events: none;
   user-select: none;
-  opacity: var(--delete-zone-opacity);
+  opacity: max(var(--action-zone-resting-opacity), var(--action-zone-opacity));
   transition: opacity 0.15s ease, transform 0.1s ease;
   z-index: 100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.delete-zone.copy-zone {
-  --delete-zone-active: var(--accent);
-  --delete-zone-pulse-shadow: rgba(34, 113, 129, 0.42);
-  --delete-zone-pulse-fade: rgba(34, 113, 129, 0);
+.action-zone.delete {
+  --action-zone-active: #ef4444;
+  --action-zone-pulse-shadow: rgba(239, 68, 68, 0.42);
+  --action-zone-pulse-fade: rgba(239, 68, 68, 0);
+  left: calc(50% - 72px);
+}
+
+.action-zone.copy {
+  --action-zone-active: var(--accent);
+  --action-zone-pulse-shadow: rgba(34, 113, 129, 0.42);
+  --action-zone-pulse-fade: rgba(34, 113, 129, 0);
   left: calc(50% + 72px);
 }
 
-.delete-zone::before {
+.action-zone::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: var(--delete-zone-active);
-  opacity: var(--delete-zone-level);
+  background: var(--action-zone-active);
+  opacity: var(--action-zone-level);
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.delete-zone svg {
+.action-zone svg {
   position: relative;
   z-index: 1;
   width: 24px;
@@ -594,29 +598,30 @@ button {
   stroke-linejoin: round;
 }
 
-.delete-zone.shaking {
-  animation: bin-shake 0.15s ease-in-out infinite;
-  --delete-zone-level: 1;
+.action-zone.shaking {
+  animation: action-zone-shake 0.15s ease-in-out infinite;
+  --action-zone-level: 1;
 }
 
-@keyframes bin-shake {
+@keyframes action-zone-shake {
 
   0%,
   100% {
-    transform: var(--delete-zone-center) rotate(0deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(0deg) scale(1.1);
   }
 
   25% {
-    transform: var(--delete-zone-center) rotate(8deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(8deg) scale(1.1);
   }
 
   75% {
-    transform: var(--delete-zone-center) rotate(-8deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(-8deg) scale(1.1);
   }
 }
 
 /* Brighten when actively dragging something */
-.workspace:has(.dragging) .delete-zone {
+.workspace:has(.dragging) .action-zone {
+  --action-zone-resting-opacity: 0.3;
   pointer-events: all;
 }
 
@@ -1104,23 +1109,23 @@ button {
   }
 }
 
-.delete-zone.tutorial-pulse {
-  --delete-zone-level: 1;
-  animation: delete-pulse 1s ease-in-out infinite;
+.action-zone.tutorial-pulse {
+  --action-zone-level: 1;
+  animation: action-zone-pulse 1s ease-in-out infinite;
   opacity: 1 !important;
 }
 
-@keyframes delete-pulse {
+@keyframes action-zone-pulse {
 
   0%,
   100% {
-    transform: var(--delete-zone-center) scale(1);
-    box-shadow: 0 0 0 0 var(--delete-zone-pulse-shadow);
+    transform: var(--action-zone-center) scale(1);
+    box-shadow: 0 0 0 0 var(--action-zone-pulse-shadow);
   }
 
   50% {
-    transform: var(--delete-zone-center) scale(1.3);
-    box-shadow: 0 0 20px 10px var(--delete-zone-pulse-fade);
+    transform: var(--action-zone-center) scale(1.3);
+    box-shadow: 0 0 20px 10px var(--action-zone-pulse-fade);
   }
 }
 
@@ -1161,12 +1166,21 @@ button {
   animation: tip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-.tutorial-tip::before {
+.tutorial-tip::before,
+.tutorial-tip::after {
   content: "";
   position: absolute;
-  inset: 0 auto 0 0;
+  inset-block: 0;
   width: 5px;
   background: var(--tip-accent);
+}
+
+.tutorial-tip::before {
+  inset: 0 auto 0 0;
+}
+
+.tutorial-tip::after {
+  inset: 0 0 0 auto;
 }
 
 .scroll-tip {

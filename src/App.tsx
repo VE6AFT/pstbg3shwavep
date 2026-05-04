@@ -84,6 +84,11 @@ function loadControls() {
 
 const STAGE_PAD = 200;
 const GRID_SIZE_INCHES = 12;
+const ACTION_ZONE_KINDS = ["delete", "copy"] as const;
+const ACTION_ZONE_DROP_PRIORITY = ["copy", "delete"] as const;
+
+type ActionZoneKind = typeof ACTION_ZONE_KINDS[number];
+type ActionZoneCenter = { x: number; y: number } | null;
 
 type DragState = {
   pointerId: number;
@@ -100,10 +105,8 @@ type DragState = {
   rotation: number;
   element: SVGGElement;
   inverseScreenMatrix: DOMMatrix;
-  deleteZoneCenter: { x: number; y: number } | null;
-  copyZoneCenter: { x: number; y: number } | null;
-  isOverDelete: boolean;
-  isOverCopy: boolean;
+  actionZoneCenters: Record<ActionZoneKind, ActionZoneCenter>;
+  activeActionZone: ActionZoneKind | null;
 } | null;
 type RotateDragState = {
   pointerId: number;
@@ -143,6 +146,23 @@ type TutorialStep = "overview";
 type SnapMode = typeof SNAP_MODES[number];
 type DimsMode = typeof DIMS_MODES[number];
 type ShareStatus = "idle" | "copied" | "failed";
+
+const ACTION_ZONES: Record<ActionZoneKind, {
+  className: string;
+  ariaLabel: string;
+  dirtyMessage: string;
+}> = {
+  delete: {
+    className: "delete",
+    ariaLabel: "Drop here to delete",
+    dirtyMessage: "Deleted tool",
+  },
+  copy: {
+    className: "copy",
+    ariaLabel: "Drop here to copy",
+    dirtyMessage: "Copied tool",
+  },
+};
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -489,7 +509,7 @@ function actionZoneProximity(clientX: number, clientY: number, center: { x: numb
   if (!center) return { level: 0, isOver: false };
   const dist = Math.hypot(clientX - center.x, clientY - center.y);
   return {
-    level: dist < 32 ? 1 : Math.max(0, 1 - dist / 300),
+    level: dist < 32 ? 1 : Math.max(0, 1 - dist / 500),
     isOver: dist < 32,
   };
 }
@@ -830,6 +850,27 @@ function DisketteStatusIcon({
   );
 }
 
+function ActionZoneIcon({ kind }: { kind: ActionZoneKind }) {
+  if (kind === "copy") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M8 8h10v10H8Z" />
+        <path d="M6 16H5c-1 0-2-1-2-2V5c0-1 1-2 2-2h9c1 0 2 1 2 2v1" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
   const [sharedTabId] = useState(() => readSharedTabId());
@@ -868,8 +909,10 @@ function App() {
   const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const deleteZoneRef = useRef<HTMLDivElement | null>(null);
-  const copyZoneRef = useRef<HTMLDivElement | null>(null);
+  const actionZoneRefs = useRef<Record<ActionZoneKind, HTMLDivElement | null>>({
+    delete: null,
+    copy: null,
+  });
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
   const rotateDragState = useRef<RotateDragState>(null);
@@ -883,8 +926,10 @@ function App() {
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
   const [tabCreationLimitMessage, setTabCreationLimitMessage] = useState<string | null>(null);
-  const deleteProximityRef = useRef(0);
-  const copyProximityRef = useRef(0);
+  const actionZoneProximityRefs = useRef<Record<ActionZoneKind, number>>({
+    delete: 0,
+    copy: 0,
+  });
   const tabsRef = useRef<LayoutTab[]>(tabs);
   const syncInFlightRef = useRef(false);
   const deferredSyncFlushRef = useRef(false);
@@ -940,6 +985,10 @@ function App() {
     activeTabButtonRef.current = element;
   }, []);
 
+  const setActionZoneElement = useCallback((kind: ActionZoneKind, element: HTMLDivElement | null) => {
+    actionZoneRefs.current[kind] = element;
+  }, []);
+
   const flashShareStatus = useCallback((status: ShareStatus) => {
     if (shareFeedbackTimerRef.current) window.clearTimeout(shareFeedbackTimerRef.current);
     setShareStatus(status);
@@ -964,26 +1013,25 @@ function App() {
     }, 900);
   }, [activeTabId, tabCreationLimitMessage]);
 
-  const paintActionZone = useCallback((zone: HTMLElement | null, level: number, shaking: boolean) => {
+  const paintActionZone = useCallback((kind: ActionZoneKind, level: number, shaking: boolean) => {
     const clampedLevel = clamp(level, 0, 1);
+    const zone = actionZoneRefs.current[kind];
     if (!zone) return;
-    zone.style.setProperty("--delete-zone-level", String(clampedLevel));
-    zone.style.setProperty("--delete-zone-opacity", String(0.15 + clampedLevel * 0.85));
+    zone.style.setProperty("--action-zone-level", String(clampedLevel));
+    zone.style.setProperty("--action-zone-opacity", String(0.2 + clampedLevel * 0.8));
     zone.classList.toggle("shaking", shaking);
   }, []);
 
-  const paintDeleteZone = useCallback((level: number) => {
+  const paintActionZoneKind = useCallback((kind: ActionZoneKind, level: number) => {
     const clampedLevel = clamp(level, 0, 1);
-    deleteProximityRef.current = clampedLevel;
+    actionZoneProximityRefs.current[kind] = clampedLevel;
     const visibleLevel = Math.max(clampedLevel, isTutorialActive ? 1 : 0);
-    paintActionZone(deleteZoneRef.current, visibleLevel, clampedLevel === 1);
+    paintActionZone(kind, visibleLevel, clampedLevel === 1);
   }, [isTutorialActive, paintActionZone]);
 
-  const paintCopyZone = useCallback((level: number) => {
-    const clampedLevel = clamp(level, 0, 1);
-    copyProximityRef.current = clampedLevel;
-    paintActionZone(copyZoneRef.current, clampedLevel, clampedLevel === 1);
-  }, [paintActionZone]);
+  const resetActionZones = useCallback(() => {
+    ACTION_ZONE_KINDS.forEach((kind) => paintActionZoneKind(kind, 0));
+  }, [paintActionZoneKind]);
 
   /**
    * Marks a tab as having unsynced local changes and schedules a background flush.
@@ -1206,8 +1254,10 @@ function App() {
   }, [scheduleSyncFlush]);
 
   useEffect(() => {
-    paintDeleteZone(deleteProximityRef.current);
-  }, [paintDeleteZone]);
+    ACTION_ZONE_KINDS.forEach((kind) => {
+      paintActionZoneKind(kind, actionZoneProximityRefs.current[kind]);
+    });
+  }, [paintActionZoneKind]);
 
   useEffect(() => {
     if (!sharedTabId || sharedTabUrlCleanedRef.current) return;
@@ -1417,8 +1467,13 @@ function App() {
     if (!matrix) return;
     const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
     if (!local) return;
-    const deleteRect = deleteZoneRef.current?.getBoundingClientRect();
-    const copyRect = copyZoneRef.current?.getBoundingClientRect();
+    const actionZoneCenters = ACTION_ZONE_KINDS.reduce((centers, kind) => {
+      const rect = actionZoneRefs.current[kind]?.getBoundingClientRect();
+      centers[kind] = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : null;
+      return centers;
+    }, {} as Record<ActionZoneKind, ActionZoneCenter>);
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
@@ -1435,14 +1490,8 @@ function App() {
       rotation: tool.rotation,
       element: event.currentTarget,
       inverseScreenMatrix: matrix,
-      deleteZoneCenter: deleteRect
-        ? { x: deleteRect.left + deleteRect.width / 2, y: deleteRect.top + deleteRect.height / 2 }
-        : null,
-      copyZoneCenter: copyRect
-        ? { x: copyRect.left + copyRect.width / 2, y: copyRect.top + copyRect.height / 2 }
-        : null,
-      isOverDelete: false,
-      isOverCopy: false,
+      actionZoneCenters,
+      activeActionZone: null,
     };
     setDraggingToolId(tool.id);
   };
@@ -1522,12 +1571,14 @@ function App() {
         }),
       );
 
-      const deleteProximity = actionZoneProximity(event.clientX, event.clientY, current.deleteZoneCenter);
-      const copyProximity = actionZoneProximity(event.clientX, event.clientY, current.copyZoneCenter);
-      current.isOverDelete = deleteProximity.isOver;
-      current.isOverCopy = copyProximity.isOver;
-      paintDeleteZone(deleteProximity.level);
-      paintCopyZone(copyProximity.level);
+      const proximities = ACTION_ZONE_KINDS.reduce((next, kind) => {
+        next[kind] = actionZoneProximity(event.clientX, event.clientY, current.actionZoneCenters[kind]);
+        return next;
+      }, {} as Record<ActionZoneKind, ReturnType<typeof actionZoneProximity>>);
+      current.activeActionZone = ACTION_ZONE_DROP_PRIORITY.find((kind) => proximities[kind].isOver) ?? null;
+      ACTION_ZONE_KINDS.forEach((kind) => {
+        paintActionZoneKind(kind, proximities[kind].level);
+      });
       return;
     }
 
@@ -1579,7 +1630,7 @@ function App() {
       svgRef.current?.releasePointerCapture(event.pointerId);
       setDraggingToolId(null);
 
-      if (current.isOverCopy) {
+      if (current.activeActionZone === "copy") {
         const sourceTab = tabsRef.current.find((tab) => tab.id === current.tabId) ?? activeTab;
         const sourceTool = sourceTab.layout.tools.find((tool) => tool.id === current.toolId);
         if (!sourceTool) return;
@@ -1619,8 +1670,8 @@ function App() {
           }),
         );
         setSelectedToolId(nextId);
-        markTabDirty(current.tabId, "Copied tool");
-      } else if (current.isOverDelete) {
+        markTabDirty(current.tabId, ACTION_ZONES.copy.dirtyMessage);
+      } else if (current.activeActionZone === "delete") {
         setTabs((currentTabs) =>
           currentTabs.map((tab) => {
             if (tab.id !== current.tabId) return tab;
@@ -1633,7 +1684,7 @@ function App() {
             };
           })
         );
-        markTabDirty(current.tabId, "Deleted tool");
+        markTabDirty(current.tabId, ACTION_ZONES.delete.dirtyMessage);
       } else {
         const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
         if (moved) {
@@ -1664,8 +1715,7 @@ function App() {
         deferredSyncFlushRef.current = false;
         scheduleSyncFlush(0);
       }
-      paintDeleteZone(0);
-      paintCopyZone(0);
+      resetActionZones();
     }
 
     const pan = panState.current;
@@ -2426,29 +2476,23 @@ function App() {
         </svg>
         {canEdit && (
           <>
-            <div
-              ref={deleteZoneRef}
-              className={`delete-zone ${isTutorialActive ? "tutorial-pulse" : ""}`}
-              aria-label="Drop here to delete"
-            >
-              <svg viewBox="0 0 24 24">
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                <line x1="10" y1="11" x2="10" y2="17" />
-                <line x1="14" y1="11" x2="14" y2="17" />
-              </svg>
-            </div>
-            <div
-              ref={copyZoneRef}
-              className={`delete-zone copy-zone ${isTutorialActive ? "tutorial-pulse" : ""}`}
-              aria-label="Drop here to copy"
-            >
-              <svg viewBox="0 0 24 24">
-                <path d="M8 8h10v10H8Z" />
-                <path d="M6 16H5c-1 0-2-1-2-2V5c0-1 1-2 2-2h9c1 0 2 1 2 2v1" />
-              </svg>
-            </div>
+            {ACTION_ZONE_KINDS.map((kind) => {
+              const zone = ACTION_ZONES[kind];
+              return (
+                <div
+                  key={kind}
+                  ref={(element) => setActionZoneElement(kind, element)}
+                  className={[
+                    "action-zone",
+                    zone.className,
+                    isTutorialActive ? "tutorial-pulse" : "",
+                  ].filter(Boolean).join(" ")}
+                  aria-label={zone.ariaLabel}
+                >
+                  <ActionZoneIcon kind={kind} />
+                </div>
+              );
+            })}
           </>
         )}
       </section>
