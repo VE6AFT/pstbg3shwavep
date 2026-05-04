@@ -541,8 +541,8 @@ button {
 .action-zone {
   --action-zone-center: translateX(-50%);
   --action-zone-level: 0;
-  --action-zone-opacity: 0.2;
-  --action-zone-resting-opacity: 0.2;
+  --action-zone-opacity: 0.4;
+  --action-zone-resting-opacity: 0.4;
   position: absolute;
   bottom: 20px;
   transform: var(--action-zone-center);
@@ -621,7 +621,7 @@ button {
 
 /* Brighten when actively dragging something */
 .workspace:has(.dragging) .action-zone {
-  --action-zone-resting-opacity: 0.3;
+  --action-zone-resting-opacity: 0.4;
   pointer-events: all;
 }
 
