@@ -1,5 +1,6 @@
 import {
   Fragment,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
   useCallback,
@@ -1742,6 +1743,19 @@ function App() {
     setSelectedToolId(tool.id);
   };
 
+  const rotateToolFromContextMenu = (event: ReactMouseEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canEdit) {
+      triggerClonePrompt();
+      return;
+    }
+    if (objectShortcutUiBusy) return;
+
+    setSelectedToolId(tool.id);
+    rotateTool(activeTabId, tool.id, 45);
+  };
+
   const moveToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rotating = rotateDragState.current;
     if (rotating && rotating.pointerId === event.pointerId) {
@@ -2737,6 +2751,7 @@ function App() {
                   data-tool-color={tool.color}
                   transform={toolTransform(tool)}
                   onPointerDown={(event) => startToolDrag(event, tool)}
+                  onContextMenu={(event) => rotateToolFromContextMenu(event, tool)}
                 >
                   <rect width={tool.width} height={tool.height} rx={0} fill={tool.color} fillOpacity={0.12} stroke={tool.color} strokeWidth={1.5} />
                   <text
