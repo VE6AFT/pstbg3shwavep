@@ -109,14 +109,28 @@ type ViewBox = {
   width: number;
   height: number;
 };
-type PanState = {
+type GesturePointer = {
+  clientX: number;
+  clientY: number;
+};
+type PanGestureState = {
+  type: "pan";
   pointerId: number;
   startClientX: number;
   startClientY: number;
   startViewBox: ViewBox;
   svgWidth: number;
   svgHeight: number;
-} | null;
+};
+type PinchGestureState = {
+  type: "pinch";
+  pointerIds: [number, number];
+  startDistance: number;
+  startViewBox: ViewBox;
+  anchorRatioX: number;
+  anchorRatioY: number;
+};
+type GestureState = PanGestureState | PinchGestureState | null;
 type ClonePrompt = {
   tabId: string;
   run: number;
@@ -489,6 +503,17 @@ function svgPointFromMatrix(matrix: DOMMatrix, clientX: number, clientY: number)
   return new DOMPoint(clientX, clientY).matrixTransform(matrix);
 }
 
+function pointerDistance(a: GesturePointer, b: GesturePointer) {
+  return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+}
+
+function pointerMidpoint(a: GesturePointer, b: GesturePointer) {
+  return {
+    clientX: (a.clientX + b.clientX) / 2,
+    clientY: (a.clientY + b.clientY) / 2,
+  };
+}
+
 function clampViewBox(viewBox: ViewBox): ViewBox {
   const width = clamp(viewBox.width, MIN_ZOOM_WIDTH, FULL_VIEWBOX.width);
   const height = clamp(viewBox.height, MIN_ZOOM_HEIGHT, FULL_VIEWBOX.height);
@@ -808,7 +833,8 @@ function App() {
   const deleteZoneRef = useRef<HTMLDivElement | null>(null);
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
   const dragState = useRef<DragState>(null);
-  const panState = useRef<PanState>(null);
+  const gestureState = useRef<GestureState>(null);
+  const activeTouchPointersRef = useRef<Map<number, GesturePointer>>(new Map());
   const syncFlushTimer = useRef<number | null>(null);
   const localWriteTimer = useRef<number | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
@@ -949,6 +975,71 @@ function App() {
     point.y = clientY;
     return point.matrixTransform(matrix.inverse());
   }, []);
+
+  const getSvgClientRatio = useCallback((clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) return null;
+    return {
+      x: (clientX - rect.left) / rect.width,
+      y: (clientY - rect.top) / rect.height,
+    };
+  }, []);
+
+  const cancelToolDragInteraction = useCallback(() => {
+    const current = dragState.current;
+    if (!current) return;
+    current.element.setAttribute(
+      "transform",
+      toolTransform({
+        x: current.originalX,
+        y: current.originalY,
+        width: current.width,
+        height: current.height,
+        rotation: current.rotation,
+      }),
+    );
+    dragState.current = null;
+    setDraggingToolId(null);
+    paintDeleteZone(0);
+  }, [paintDeleteZone]);
+
+  const startPanGesture = useCallback((pointerId: number, clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    gestureState.current = {
+      type: "pan",
+      pointerId,
+      startClientX: clientX,
+      startClientY: clientY,
+      startViewBox: viewBox,
+      svgWidth: rect.width,
+      svgHeight: rect.height,
+    };
+    setIsPanning(true);
+  }, [viewBox]);
+
+  const startPinchGesture = useCallback(() => {
+    const entries = Array.from(activeTouchPointersRef.current.entries());
+    if (entries.length < 2) return false;
+
+    const [[firstId, firstPointer], [secondId, secondPointer]] = entries;
+    const midpoint = pointerMidpoint(firstPointer, secondPointer);
+    const anchor = getSvgPoint(midpoint.clientX, midpoint.clientY);
+    const startDistance = pointerDistance(firstPointer, secondPointer);
+    if (!anchor || startDistance <= 0) return false;
+
+    cancelToolDragInteraction();
+    gestureState.current = {
+      type: "pinch",
+      pointerIds: [firstId, secondId],
+      startDistance,
+      startViewBox: viewBox,
+      anchorRatioX: (anchor.x - viewBox.minX) / viewBox.width,
+      anchorRatioY: (anchor.y - viewBox.minY) / viewBox.height,
+    };
+    setIsPanning(false);
+    return true;
+  }, [cancelToolDragInteraction, getSvgPoint, viewBox]);
 
   /**
    * The core background sync loop.
@@ -1344,6 +1435,17 @@ function App() {
   const startToolDrag = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
     event.preventDefault();
     event.stopPropagation();
+    if (event.pointerType === "touch") {
+      activeTouchPointersRef.current.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+      svgRef.current?.setPointerCapture(event.pointerId);
+      if (activeTouchPointersRef.current.size >= 2) {
+        startPinchGesture();
+        return;
+      }
+    }
     if (!canEdit) {
       triggerClonePrompt();
       return;
@@ -1397,6 +1499,38 @@ function App() {
   };
 
   const moveToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.pointerType === "touch" && activeTouchPointersRef.current.has(event.pointerId)) {
+      activeTouchPointersRef.current.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+    }
+
+    const gesture = gestureState.current;
+    if (gesture?.type === "pinch") {
+      const [firstId, secondId] = gesture.pointerIds;
+      const firstPointer = activeTouchPointersRef.current.get(firstId);
+      const secondPointer = activeTouchPointersRef.current.get(secondId);
+      if (!firstPointer || !secondPointer) return;
+
+      const midpoint = pointerMidpoint(firstPointer, secondPointer);
+      const ratio = getSvgClientRatio(midpoint.clientX, midpoint.clientY);
+      if (!ratio) return;
+
+      const scale = pointerDistance(firstPointer, secondPointer) / gesture.startDistance;
+      const nextWidth = clamp(gesture.startViewBox.width / scale, MIN_ZOOM_WIDTH, FULL_VIEWBOX.width);
+      const nextHeight = clamp(gesture.startViewBox.height / scale, MIN_ZOOM_HEIGHT, FULL_VIEWBOX.height);
+      const anchorX = gesture.startViewBox.minX + gesture.anchorRatioX * gesture.startViewBox.width;
+      const anchorY = gesture.startViewBox.minY + gesture.anchorRatioY * gesture.startViewBox.height;
+      setViewBox(clampViewBox({
+        minX: anchorX - ratio.x * nextWidth,
+        minY: anchorY - ratio.y * nextHeight,
+        width: nextWidth,
+        height: nextHeight,
+      }));
+      return;
+    }
+
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       const local = svgPointFromMatrix(current.inverseScreenMatrix, event.clientX, event.clientY);
@@ -1425,15 +1559,14 @@ function App() {
       return;
     }
 
-    const pan = panState.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
-    const dx = (event.clientX - pan.startClientX) * (pan.startViewBox.width / pan.svgWidth);
-    const dy = (event.clientY - pan.startClientY) * (pan.startViewBox.height / pan.svgHeight);
+    if (gesture?.type !== "pan" || gesture.pointerId !== event.pointerId) return;
+    const dx = (event.clientX - gesture.startClientX) * (gesture.startViewBox.width / gesture.svgWidth);
+    const dy = (event.clientY - gesture.startClientY) * (gesture.startViewBox.height / gesture.svgHeight);
     setViewBox(
       clampViewBox({
-        ...pan.startViewBox,
-        minX: pan.startViewBox.minX - dx,
-        minY: pan.startViewBox.minY - dy,
+        ...gesture.startViewBox,
+        minX: gesture.startViewBox.minX - dx,
+        minY: gesture.startViewBox.minY - dy,
       }),
     );
   };
@@ -1492,16 +1625,46 @@ function App() {
       paintDeleteZone(0);
     }
 
-    const pan = panState.current;
-    if (pan && pan.pointerId === event.pointerId) {
-      panState.current = null;
-      svgRef.current?.releasePointerCapture(event.pointerId);
+    if (event.pointerType === "touch") {
+      activeTouchPointersRef.current.delete(event.pointerId);
+    }
+
+    const gesture = gestureState.current;
+    if (gesture?.type === "pinch" && gesture.pointerIds.includes(event.pointerId)) {
+      const remainingPointers = Array.from(activeTouchPointersRef.current.entries());
+      if (remainingPointers.length >= 2) {
+        startPinchGesture();
+      } else if (remainingPointers.length === 1) {
+        const [[pointerId, pointer]] = remainingPointers;
+        startPanGesture(pointerId, pointer.clientX, pointer.clientY);
+      } else {
+        gestureState.current = null;
+        setIsPanning(false);
+      }
+    } else if (gesture?.type === "pan" && gesture.pointerId === event.pointerId) {
+      gestureState.current = null;
       setIsPanning(false);
+    }
+
+    if (!activeTouchPointersRef.current.has(event.pointerId) && svgRef.current?.hasPointerCapture(event.pointerId)) {
+      svgRef.current.releasePointerCapture(event.pointerId);
     }
   };
 
   const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
     event.preventDefault();
+    if (event.pointerType === "touch") {
+      activeTouchPointersRef.current.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+      svgRef.current?.setPointerCapture(event.pointerId);
+      if (activeTouchPointersRef.current.size >= 2) {
+        startPinchGesture();
+        return;
+      }
+    }
+
     const isToolTarget = event.target instanceof Element && Boolean(event.target.closest(".tool-node"));
     if (isToolTarget) {
       if (shouldPromptForClone) triggerClonePrompt();
@@ -1510,18 +1673,8 @@ function App() {
     if (shouldPromptForClone) {
       triggerClonePrompt();
     }
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
     svgRef.current?.setPointerCapture(event.pointerId);
-    panState.current = {
-      pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startViewBox: viewBox,
-      svgWidth: rect.width,
-      svgHeight: rect.height,
-    };
-    setIsPanning(true);
+    startPanGesture(event.pointerId, event.clientX, event.clientY);
   };
 
   const zoomFloorplan = (event: ReactWheelEvent<SVGSVGElement>) => {
