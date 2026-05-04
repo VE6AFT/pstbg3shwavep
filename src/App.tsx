@@ -2319,6 +2319,22 @@ function App() {
     clone.setAttribute("width", String(FULL_VIEWBOX.width));
     clone.setAttribute("height", String(FULL_VIEWBOX.height));
 
+    if (renamingTool) {
+      const trimmed = normalizeToolName(toolRenameDraft);
+      if (trimmed) {
+        const renamedTool = Array.from(clone.querySelectorAll<SVGGElement>(".tool-node"))
+          .find((tool) => tool.getAttribute("data-tool-id") === renamingTool.toolId);
+        const label = Array.from(renamedTool?.children ?? [])
+          .find((child) => child.tagName.toLowerCase() === "text");
+        renamedTool?.setAttribute("inkscape:label", trimmed);
+        if (label) label.textContent = trimmed;
+      }
+    }
+
+    clone.querySelectorAll(".activity-keyboard-callout, .tool-rename-editor").forEach((node) => {
+      node.remove();
+    });
+
     const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
     style.textContent = `
       .infra-layer{display:${showInfra ? "block" : "none"}}
@@ -2346,7 +2362,10 @@ function App() {
       canvas.width = FULL_VIEWBOX.width;
       canvas.height = FULL_VIEWBOX.height;
       const context = canvas.getContext("2d");
-      if (!context) return;
+      if (!context) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       context.fillStyle = "#fbfaf6";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0);
@@ -2355,6 +2374,10 @@ function App() {
         URL.revokeObjectURL(url);
       }, "image/png");
       pushDebugEvent("export png");
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      pushDebugEvent("export png failed");
     };
     image.src = url;
   };
@@ -3039,7 +3062,11 @@ function App() {
               </div>
               <div>
                 <dt>Home/End</dt>
-                <dd>change activity</dd>
+                <dd>activity</dd>
+              </div>
+              <div>
+                <dt>Enter</dt>
+                <dd>rename</dd>
               </div>
             </dl>
           </div>
