@@ -3,4 +3,5 @@ node_modules/
 .wrangler/
 .dev.vars
 *.log
-scripts/.DS_Store
+scripts/
+.DS_Store
