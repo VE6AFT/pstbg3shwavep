@@ -13,6 +13,9 @@ A high-performance, shareable floorplan editor built for rapid layout prototypin
 
 ---
 
+<img width="539" height="340" alt="image" src="https://github.com/user-attachments/assets/6e83c883-3bd1-4e5a-a3c8-2716fb6f0eda" />
+
+
 ### ✅ Must Have
 - **Shareable floorplan editing**: Real-time collaboration and easy sharing via unique URLs.
 - **Clone & Riff**: One-click cloning of any public floorplan to start your own version.

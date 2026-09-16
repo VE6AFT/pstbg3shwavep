@@ -30,7 +30,8 @@ export function isDevDebugOrigin() {
   return LOCAL_DEBUG_HOSTS.has(window.location.hostname) || window.location.origin === DEV_DEBUG_ORIGIN;
 }
 
-export function useDebugPanel() {
+export function useDebugPanel(options: { onKeyDown?: (event: KeyboardEvent) => void } = {}) {
+  const { onKeyDown } = options;
   const [showDevLauncher] = useState(() => isDevDebugOrigin());
   const [isVisible, setIsVisible] = useState(() => isDevDebugOrigin());
   const [events, setEvents] = useState<DebugEvent[]>(() => [
@@ -58,11 +59,12 @@ export function useDebugPanel() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       toggleFromKey(event.key);
+      onKeyDown?.(event);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleFromKey]);
+  }, [onKeyDown, toggleFromKey]);
 
   useEffect(() => {
     if (!logRef.current) return;

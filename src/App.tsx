@@ -1,4 +1,6 @@
 import {
+  Fragment,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
   useCallback,
@@ -37,11 +39,12 @@ const CONTROLS_STORAGE_KEY = "pstbg3shwavep-controls";
 const LOCAL_WRITE_DELAY_MS = 300;
 const DEFAULT_SAVE_DELAY_MS = 5000;
 const MISSING_LOCAL_LAYOUT_MESSAGE = "Local draft layout unavailable; changes were not synced";
-const TAB_DELETE_CONFIRM_MS = 3200;
-const TUTORIAL_STEP_MS = 5000;
+const TAB_DELETE_CONFIRM_MS = 2200;
 const SHARE_FEEDBACK_MS = 1800;
-const TUTORIAL_STEPS = ["zoom", "rotate", "delete", "add", "rename"] as const;
+const KEYBOARD_ACTIVITY_CALLOUT_MS = 1400;
 const SNAP_MODES = ["off", "top-left", "center"] as const;
+const DIMS_MODES = ["off", "selected", "all"] as const;
+const ROTATION_SNAP_DEGREES = 5;
 const MAX_TAB_NAME_CHARS = VALIDATION_LIMITS.tabNameChars;
 const MAX_TOOL_NAME_CHARS = VALIDATION_LIMITS.toolNameChars;
 const MAX_TOOL_SIZE_INCHES = VALIDATION_LIMITS.maxSize;
@@ -76,7 +79,7 @@ const STATIC_TOOL_HAZARDS = new Set<NonNullable<ToolShape["hazards"]>[number]>([
 function loadControls() {
   try {
     const raw = localStorage.getItem(CONTROLS_STORAGE_KEY);
-    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; snapMode?: SnapMode; showInfra?: boolean; showMezz?: boolean };
+    return (raw ? JSON.parse(raw) : {}) as { gridDark?: boolean; snapMode?: SnapMode; dimsMode?: DimsMode; showInfra?: boolean; showMezz?: boolean };
   } catch {
     return {};
   }
@@ -84,6 +87,22 @@ function loadControls() {
 
 const STAGE_PAD = 200;
 const GRID_SIZE_INCHES = 12;
+const ACTION_ZONE_KINDS = ["delete", "copy"] as const;
+const ACTION_ZONE_DROP_PRIORITY = ["copy", "delete"] as const;
+
+type ActionZoneKind = typeof ACTION_ZONE_KINDS[number];
+type ActionZoneCenter = { x: number; y: number } | null;
+type ActivityKind = NonNullable<ToolShape["activity"]>;
+type KeyboardActivityCallout = {
+  tabId: string;
+  toolId: string;
+  activity: ActivityKind;
+  sequence: number;
+};
+type ToolRenameTarget = {
+  tabId: string;
+  toolId: string;
+};
 
 type DragState = {
   pointerId: number;
@@ -100,9 +119,34 @@ type DragState = {
   rotation: number;
   element: SVGGElement;
   inverseScreenMatrix: DOMMatrix;
-  deleteZoneCenter: { x: number; y: number } | null;
-  isOverDelete: boolean;
+  actionZoneCenters: Record<ActionZoneKind, ActionZoneCenter>;
+  activeActionZone: ActionZoneKind | null;
 } | null;
+type RotateDragState = {
+  pointerId: number;
+  tabId: string;
+  toolId: string;
+  originalRotation: number;
+  latestRotation: number;
+  startAngle: number;
+  centerX: number;
+  centerY: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  element: SVGGElement;
+  inverseScreenMatrix: DOMMatrix;
+} | null;
+const TOOL_LABEL_TEXT_PROPS = {
+  dominantBaseline: "middle",
+  textAnchor: "middle",
+  fill: "#202427",
+  fontSize: 12,
+  fontWeight: 800,
+  fontFamily: "sans-serif",
+  style: { pointerEvents: "none", userSelect: "none" },
+} as const;
 type ViewBox = {
   minX: number;
   minY: number;
@@ -135,9 +179,27 @@ type ClonePrompt = {
   tabId: string;
   run: number;
 } | null;
-type TutorialStep = typeof TUTORIAL_STEPS[number];
+type TutorialStep = "overview";
 type SnapMode = typeof SNAP_MODES[number];
+type DimsMode = typeof DIMS_MODES[number];
 type ShareStatus = "idle" | "copied" | "failed";
+
+const ACTION_ZONES: Record<ActionZoneKind, {
+  className: string;
+  ariaLabel: string;
+  dirtyMessage: string;
+}> = {
+  delete: {
+    className: "delete",
+    ariaLabel: "Drop here to delete",
+    dirtyMessage: "Deleted tool",
+  },
+  copy: {
+    className: "copy",
+    ariaLabel: "Drop here to copy",
+    dirtyMessage: "Copied tool",
+  },
+};
 
 function parseSvgViewBox(markup: string): ViewBox {
   const match = markup.match(/\bviewBox=["']([^"']+)["']/i);
@@ -375,7 +437,11 @@ function inchesToFeetInches(value: number) {
   const total = Math.round(Math.abs(value));
   const feet = Math.floor(total / 12);
   const inches = total % 12;
-  return `${sign}${feet}' ${inches}"`;
+  const parts = [
+    feet > 0 ? `${feet}'` : "",
+    inches > 0 ? `${inches}"` : "",
+  ].filter(Boolean);
+  return `${sign}${parts.length > 0 ? parts.join(" ") : `0"`}`;
 }
 
 function normalizeTabName(name: string | null | undefined, fallback: string) {
@@ -464,8 +530,56 @@ function snapToolPosition(tool: Pick<ToolShape, "width" | "height">, x: number, 
   return clampToolPosition(tool, x, y);
 }
 
+function normalizeRotation(value: number) {
+  return ((value % 360) + 360) % 360;
+}
+
+function snapRotation(value: number) {
+  return normalizeRotation(Math.round(value / ROTATION_SNAP_DEGREES) * ROTATION_SNAP_DEGREES);
+}
+
+function angleDegreesFromCenter(centerX: number, centerY: number, pointX: number, pointY: number) {
+  return Math.atan2(pointY - centerY, pointX - centerX) * 180 / Math.PI;
+}
+
+function actionZoneProximity(clientX: number, clientY: number, center: { x: number; y: number } | null) {
+  if (!center) return { level: 0, isOver: false };
+  const dist = Math.hypot(clientX - center.x, clientY - center.y);
+  return {
+    level: dist < 32 ? 1 : Math.max(0, 1 - dist / 500),
+    isOver: dist < 32,
+  };
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tagName = target.tagName;
+  return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+}
+
+function nextActivity(activity: ToolShape["activity"], step: 1 | -1) {
+  const currentActivity = activity ?? "undefined";
+  const currentIndex = ACTIVITY_ORDER.indexOf(currentActivity);
+  const startIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (startIndex + step + ACTIVITY_ORDER.length) % ACTIVITY_ORDER.length;
+  return ACTIVITY_ORDER[nextIndex];
+}
+
+function toolActionKey(tabId: string, toolId: string) {
+  return `${tabId}:${toolId}`;
+}
+
+function allToolIds(tabs: LayoutTab[]) {
+  return tabs.flatMap((tab) => tab.layout.tools.map((tool) => tool.id));
+}
+
 function isSnapMode(value: unknown): value is SnapMode {
   return typeof value === "string" && SNAP_MODES.includes(value as SnapMode);
+}
+
+function isDimsMode(value: unknown): value is DimsMode {
+  return typeof value === "string" && DIMS_MODES.includes(value as DimsMode);
 }
 
 function nextSnapMode(mode: SnapMode): SnapMode {
@@ -473,9 +587,20 @@ function nextSnapMode(mode: SnapMode): SnapMode {
   return SNAP_MODES[(index + 1) % SNAP_MODES.length];
 }
 
+function nextDimsMode(mode: DimsMode): DimsMode {
+  const index = DIMS_MODES.indexOf(mode);
+  return DIMS_MODES[(index + 1) % DIMS_MODES.length];
+}
+
 function snapModeLabel(mode: SnapMode) {
   if (mode === "top-left") return "top-left";
   if (mode === "center") return "center";
+  return "off";
+}
+
+function dimsModeLabel(mode: DimsMode) {
+  if (mode === "selected") return "selected";
+  if (mode === "all") return "all";
   return "off";
 }
 
@@ -489,6 +614,34 @@ function clampTool(tool: ToolShape): ToolShape {
 
 function toolTransform(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "rotation">) {
   return `translate(${tool.x} ${tool.y}) rotate(${tool.rotation} ${tool.width / 2} ${tool.height / 2})`;
+}
+
+function toolRenameEditorBox(tool: Pick<ToolShape, "x" | "y" | "width" | "height" | "rotation">) {
+  const centerX = tool.x + tool.width / 2;
+  const centerY = tool.y + tool.height / 2;
+  const radians = tool.rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const corners = [
+    { x: tool.x, y: tool.y },
+    { x: tool.x + tool.width, y: tool.y },
+    { x: tool.x + tool.width, y: tool.y + tool.height },
+    { x: tool.x, y: tool.y + tool.height },
+  ].map((corner) => {
+    const dx = corner.x - centerX;
+    const dy = corner.y - centerY;
+    return {
+      x: centerX + dx * cos - dy * sin,
+      y: centerY + dx * sin + dy * cos,
+    };
+  });
+  const width = clamp(Math.max(tool.width, 96), 96, 220);
+  return {
+    x: centerX - width / 2,
+    y: Math.min(...corners.map((corner) => corner.y)) - 34,
+    width,
+    height: 26,
+  };
 }
 
 function isSamePersistedDraft(current: LayoutTab, draft: LayoutTab) {
@@ -787,6 +940,7 @@ const ACTIVITY_COLORS = {
   green: "#00ff00",
   blue: "#0000ff",
 } as const;
+const ACTIVITY_ORDER = Object.keys(ACTIVITY_COLORS) as Array<keyof typeof ACTIVITY_COLORS>;
 
 function DisketteStatusIcon({
   status,
@@ -833,6 +987,27 @@ function DisketteStatusIcon({
   );
 }
 
+function ActionZoneIcon({ kind }: { kind: ActionZoneKind }) {
+  if (kind === "copy") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M8 8h10v10H8Z" />
+        <path d="M6 16H5c-1 0-2-1-2-2V5c0-1 1-2 2-2h9c1 0 2 1 2 2v1" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
 function App() {
   const [localUserId] = useState(() => getOrCreateUserId());
   const [sharedTabId] = useState(() => readSharedTabId());
@@ -847,9 +1022,12 @@ function App() {
     const mode = loadControls().snapMode;
     return isSnapMode(mode) ? mode : "top-left";
   });
-  const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? false);
+  const [dimsMode, setDimsMode] = useState<DimsMode>(() => {
+    const mode = loadControls().dimsMode;
+    return isDimsMode(mode) ? mode : "selected";
+  });
+  const [showInfra, setShowInfra] = useState(() => loadControls().showInfra ?? true);
   const [showMezz, setShowMezz] = useState(() => loadControls().showMezz ?? true);
-  const debugPanel = useDebugPanel();
   const [showAddTool, setShowAddTool] = useState(false);
   const [addToolForm, setAddToolForm] = useState({
     name: "",
@@ -865,25 +1043,39 @@ function App() {
   const viewBoxRef = useRef<ViewBox>(FULL_VIEWBOX);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [renamingTool, setRenamingTool] = useState<ToolRenameTarget | null>(null);
+  const [toolRenameDraft, setToolRenameDraft] = useState("");
   const [confirmingDeleteTabId, setConfirmingDeleteTabId] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const deleteZoneRef = useRef<HTMLDivElement | null>(null);
+  const actionZoneRefs = useRef<Record<ActionZoneKind, HTMLDivElement | null>>({
+    delete: null,
+    copy: null,
+  });
   const activeTabButtonRef = useRef<HTMLElement | null>(null);
+  const toolRenameInputRef = useRef<HTMLInputElement | null>(null);
   const dragState = useRef<DragState>(null);
   const gestureState = useRef<GestureState>(null);
   const activeTouchPointersRef = useRef<Map<number, GesturePointer>>(new Map());
+  const rotateDragState = useRef<RotateDragState>(null);
   const syncFlushTimer = useRef<number | null>(null);
   const localWriteTimer = useRef<number | null>(null);
   const saveDelayMs = useRef<number>(DEFAULT_SAVE_DELAY_MS);
   const [tutorialStep, setTutorialStep] = useState<null | TutorialStep>(null);
+  const [renameTipAnchor, setRenameTipAnchor] = useState<{ left: number; top: number } | null>(null);
   const [clonePrompt, setClonePrompt] = useState<ClonePrompt>(null);
+  const [keyboardActivityCallout, setKeyboardActivityCallout] = useState<KeyboardActivityCallout | null>(null);
   const [cacheReady, setCacheReady] = useState(false);
   const [dbReachable, setDbReachable] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [syncInFlight, setSyncInFlight] = useState(false);
   const [tabCreationLimitMessage, setTabCreationLimitMessage] = useState<string | null>(null);
-  const deleteProximityRef = useRef(0);
+  const actionZoneProximityRefs = useRef<Record<ActionZoneKind, number>>({
+    delete: 0,
+    copy: 0,
+  });
   const tabsRef = useRef<LayoutTab[]>(tabs);
+  const issuedToolIdsRef = useRef<Set<string>>(new Set());
+  const pendingDeletedToolIdsRef = useRef<Set<string>>(new Set());
   const syncInFlightRef = useRef(false);
   const deferredSyncFlushRef = useRef(false);
   const cacheWriteInFlightRef = useRef(false);
@@ -891,6 +1083,9 @@ function App() {
   const flashTimerRef = useRef<number | null>(null);
   const deleteConfirmTimerRef = useRef<number | null>(null);
   const shareFeedbackTimerRef = useRef<number | null>(null);
+  const keyboardActivityCalloutTimerRef = useRef<number | null>(null);
+  const pendingKeyboardActivityCalloutRef = useRef<Omit<KeyboardActivityCallout, "activity"> | null>(null);
+  const keyboardActivityCalloutSequenceRef = useRef(0);
   const sharedTabUrlCleanedRef = useRef(false);
   const clonePromptRunRef = useRef(0);
   const localAuthorTabCountRef = useRef(0);
@@ -901,6 +1096,7 @@ function App() {
   const activeTabIsStaticNow = isStaticNowTab(activeTab);
   const activeTabHasLayout = activeTab?.hasLayout !== false;
   const selectedTool = activeTabHasLayout ? activeTab?.layout.tools.find((tool) => tool.id === selectedToolId) ?? null : null;
+  const isTutorialActive = tutorialStep !== null;
   const canOfferClone = !tabCreationLimitMessage && !isClientAuthorTabLimitReached(tabs, localUserId);
   const canShareActiveTab = isShareableTab(activeTab);
   const shareTooltip = !canShareActiveTab
@@ -913,6 +1109,44 @@ function App() {
 
   const canEdit = activeTabHasLayout && !activeTabIsStaticNow && (activeTab.canEdit === true || activeTab.authorId === localUserId);
   const shouldPromptForClone = !canEdit;
+  const objectShortcutUiBusy = showAddTool || renamingTabId !== null || renamingTool !== null;
+  const duplicateSelectedToolRef = useRef<(() => boolean) | null>(null);
+  const deleteSelectedToolRef = useRef<(() => boolean) | null>(null);
+  const rotateSelectedToolRef = useRef<((delta: number) => boolean) | null>(null);
+  const cycleSelectedToolActivityRef = useRef<((step: 1 | -1) => boolean) | null>(null);
+  const renameSelectedToolRef = useRef<(() => boolean) | null>(null);
+  const debugPanel = useDebugPanel({
+    onKeyDown: (event) => {
+      if (event.defaultPrevented || isTypingTarget(event.target) || objectShortcutUiBusy) return;
+      if (event.key === "Enter") {
+        if (renameSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
+      if (event.key === "Insert") {
+        if (duplicateSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (deleteSelectedToolRef.current?.()) event.preventDefault();
+        return;
+      }
+      if (event.key === "PageUp") {
+        if (rotateSelectedToolRef.current?.(-45)) event.preventDefault();
+        return;
+      }
+      if (event.key === "PageDown") {
+        if (rotateSelectedToolRef.current?.(45)) event.preventDefault();
+        return;
+      }
+      if (event.key === "Home") {
+        if (cycleSelectedToolActivityRef.current?.(-1)) event.preventDefault();
+        return;
+      }
+      if (event.key === "End") {
+        if (cycleSelectedToolActivityRef.current?.(1)) event.preventDefault();
+      }
+    },
+  });
   const pushDebugEvent = debugPanel.pushEvent;
   const syncErrorTab = activeTab?.syncError
     ? activeTab
@@ -935,6 +1169,24 @@ function App() {
 
   const setActiveTabElement = useCallback((element: HTMLElement | null) => {
     activeTabButtonRef.current = element;
+  }, []);
+
+  const updateRenameTipAnchor = useCallback(() => {
+    const element = activeTabButtonRef.current;
+    if (!element) {
+      setRenameTipAnchor(null);
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    setRenameTipAnchor({
+      left: rect.left + rect.width * 0.76,
+      top: rect.top + rect.height * 0.24,
+    });
+  }, []);
+
+  const setActionZoneElement = useCallback((kind: ActionZoneKind, element: HTMLDivElement | null) => {
+    actionZoneRefs.current[kind] = element;
   }, []);
 
   const flashShareStatus = useCallback((status: ShareStatus) => {
@@ -961,15 +1213,25 @@ function App() {
     }, 900);
   }, [activeTabId, tabCreationLimitMessage]);
 
-  const paintDeleteZone = useCallback((level: number) => {
+  const paintActionZone = useCallback((kind: ActionZoneKind, level: number, shaking: boolean) => {
     const clampedLevel = clamp(level, 0, 1);
-    deleteProximityRef.current = clampedLevel;
-    const zone = deleteZoneRef.current;
+    const zone = actionZoneRefs.current[kind];
     if (!zone) return;
-    const visibleLevel = Math.max(clampedLevel, tutorialStep === "delete" ? 1 : 0);
-    zone.style.setProperty("--delete-zone-level", String(visibleLevel));
-    zone.classList.toggle("shaking", clampedLevel === 1);
-  }, [tutorialStep]);
+    zone.style.setProperty("--action-zone-level", String(clampedLevel));
+    zone.style.setProperty("--action-zone-opacity", String(0.2 + clampedLevel * 0.8));
+    zone.classList.toggle("shaking", shaking);
+  }, []);
+
+  const paintActionZoneKind = useCallback((kind: ActionZoneKind, level: number) => {
+    const clampedLevel = clamp(level, 0, 1);
+    actionZoneProximityRefs.current[kind] = clampedLevel;
+    const visibleLevel = Math.max(clampedLevel, isTutorialActive ? 1 : 0);
+    paintActionZone(kind, visibleLevel, clampedLevel === 1);
+  }, [isTutorialActive, paintActionZone]);
+
+  const resetActionZones = useCallback(() => {
+    ACTION_ZONE_KINDS.forEach((kind) => paintActionZoneKind(kind, 0));
+  }, [paintActionZoneKind]);
 
   /**
    * Marks a tab as having unsynced local changes and schedules a background flush.
@@ -1035,8 +1297,8 @@ function App() {
     );
     dragState.current = null;
     setDraggingToolId(null);
-    paintDeleteZone(0);
-  }, [paintDeleteZone]);
+    resetActionZones();
+  }, [resetActionZones]);
 
   const startPanGesture = useCallback((pointerId: number, clientX: number, clientY: number) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1205,33 +1467,58 @@ function App() {
 
   useEffect(() => {
     if (!tutorialStep) return;
+    setShowAddTool(true);
+  }, [tutorialStep]);
 
-    if (tutorialStep === "add") {
-      setShowAddTool(true);
+  useEffect(() => {
+    if (!isTutorialActive) {
+      setRenameTipAnchor(null);
+      return;
     }
 
-    const timer = window.setTimeout(() => {
-      const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
-      const nextStep = TUTORIAL_STEPS[currentIndex + 1] ?? null;
+    let animationFrame: number | null = null;
+    const scheduleAnchorUpdate = () => {
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        updateRenameTipAnchor();
+      });
+    };
 
-      if (nextStep === "add") {
-        setShowAddTool(true);
+    scheduleAnchorUpdate();
+    window.addEventListener("resize", scheduleAnchorUpdate);
+    window.addEventListener("scroll", scheduleAnchorUpdate, true);
+
+    return () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
       }
-      if (tutorialStep === "add") {
-        setShowAddTool(false);
-      }
-
-      setTutorialStep(nextStep);
-    }, TUTORIAL_STEP_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [tutorialStep]);
+      window.removeEventListener("resize", scheduleAnchorUpdate);
+      window.removeEventListener("scroll", scheduleAnchorUpdate, true);
+    };
+  }, [activeTabId, isTutorialActive, tabs.length, updateRenameTipAnchor]);
 
   useEffect(() => {
     if (!canEdit) {
       setShowAddTool(false);
+      setRenamingTool(null);
+      setToolRenameDraft("");
     }
   }, [activeTabId, canEdit]);
+
+  useEffect(() => {
+    if (!renamingTool) return;
+    if (renamingTool.tabId !== activeTabId || !activeTab.layout.tools.some((tool) => tool.id === renamingTool.toolId)) {
+      setRenamingTool(null);
+      setToolRenameDraft("");
+    }
+  }, [activeTab, activeTabId, renamingTool]);
+
+  useEffect(() => {
+    if (!renamingTool) return;
+    toolRenameInputRef.current?.focus();
+    toolRenameInputRef.current?.select();
+  }, [renamingTool]);
 
   useEffect(() => {
     if (shareFeedbackTimerRef.current) {
@@ -1257,6 +1544,9 @@ function App() {
     if (localWriteTimer.current) {
       window.clearTimeout(localWriteTimer.current);
     }
+    if (keyboardActivityCalloutTimerRef.current) {
+      window.clearTimeout(keyboardActivityCalloutTimerRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -1275,8 +1565,10 @@ function App() {
   }, [scheduleSyncFlush]);
 
   useEffect(() => {
-    paintDeleteZone(deleteProximityRef.current);
-  }, [paintDeleteZone]);
+    ACTION_ZONE_KINDS.forEach((kind) => {
+      paintActionZoneKind(kind, actionZoneProximityRefs.current[kind]);
+    });
+  }, [paintActionZoneKind]);
 
   useEffect(() => {
     if (!sharedTabId || sharedTabUrlCleanedRef.current) return;
@@ -1401,6 +1693,34 @@ function App() {
   useEffect(() => {
     tabsRef.current = tabs;
     localAuthorTabCountRef.current = countClientAuthorTabs(tabs, localUserId);
+    const liveToolKeys = new Set(tabs.flatMap((tab) => tab.layout.tools.map((tool) => toolActionKey(tab.id, tool.id))));
+    pendingDeletedToolIdsRef.current.forEach((key) => {
+      if (!liveToolKeys.has(key)) pendingDeletedToolIdsRef.current.delete(key);
+    });
+
+    const pendingCallout = pendingKeyboardActivityCalloutRef.current;
+    if (!pendingCallout) return;
+
+    const calloutTool = tabs
+      .find((tab) => tab.id === pendingCallout.tabId)
+      ?.layout.tools.find((tool) => tool.id === pendingCallout.toolId);
+    pendingKeyboardActivityCalloutRef.current = null;
+    if (!calloutTool) return;
+
+    if (keyboardActivityCalloutTimerRef.current) {
+      window.clearTimeout(keyboardActivityCalloutTimerRef.current);
+    }
+
+    setKeyboardActivityCallout({
+      ...pendingCallout,
+      activity: calloutTool.activity ?? "undefined",
+    });
+    keyboardActivityCalloutTimerRef.current = window.setTimeout(() => {
+      keyboardActivityCalloutTimerRef.current = null;
+      setKeyboardActivityCallout((current) => (
+        current?.sequence === pendingCallout.sequence ? null : current
+      ));
+    }, KEYBOARD_ACTIVITY_CALLOUT_MS);
   }, [localUserId, tabs]);
 
   useEffect(() => {
@@ -1411,9 +1731,9 @@ function App() {
   useEffect(() => {
     localStorage.setItem(
       CONTROLS_STORAGE_KEY,
-      JSON.stringify({ gridDark, snapMode, showInfra, showMezz })
+      JSON.stringify({ gridDark, snapMode, dimsMode, showInfra, showMezz })
     );
-  }, [gridDark, snapMode, showInfra, showMezz]);
+  }, [gridDark, snapMode, dimsMode, showInfra, showMezz]);
 
   const queueCacheSnapshotWrite = useCallback((snapshot: LayoutTab[]) => {
     queuedCacheSnapshotRef.current = snapshot;
@@ -1492,20 +1812,8 @@ function App() {
       return;
     }
 
-    if (event.button === 2 || event.ctrlKey) {
-      setTabs((current) =>
-        current.map((tab) => {
-          if (tab.id !== activeTabId) return tab;
-          return {
-            ...tab,
-            layout: {
-              ...tab.layout,
-              tools: tab.layout.tools.map((t) => (t.id === tool.id ? { ...t, rotation: (t.rotation + 45) % 360 } : t)),
-            },
-          };
-        }),
-      );
-      markTabDirty(activeTabId, "Saving in background");
+    setSelectedToolId(tool.id);
+    if (event.button !== 0) {
       return;
     }
 
@@ -1513,7 +1821,13 @@ function App() {
     if (!matrix) return;
     const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
     if (!local) return;
-    const deleteRect = deleteZoneRef.current?.getBoundingClientRect();
+    const actionZoneCenters = ACTION_ZONE_KINDS.reduce((centers, kind) => {
+      const rect = actionZoneRefs.current[kind]?.getBoundingClientRect();
+      centers[kind] = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : null;
+      return centers;
+    }, {} as Record<ActionZoneKind, ActionZoneCenter>);
     svgRef.current?.setPointerCapture(event.pointerId);
     dragState.current = {
       pointerId: event.pointerId,
@@ -1530,13 +1844,59 @@ function App() {
       rotation: tool.rotation,
       element: event.currentTarget,
       inverseScreenMatrix: matrix,
-      deleteZoneCenter: deleteRect
-        ? { x: deleteRect.left + deleteRect.width / 2, y: deleteRect.top + deleteRect.height / 2 }
-        : null,
-      isOverDelete: false,
+      actionZoneCenters,
+      activeActionZone: null,
+    };
+    setDraggingToolId(tool.id);
+  };
+
+  const startToolRotate = (event: ReactPointerEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canEdit) {
+      triggerClonePrompt();
+      return;
+    }
+    if (event.button !== 0) return;
+
+    const matrix = svgRef.current?.getScreenCTM()?.inverse();
+    const element = event.currentTarget.closest(".tool-node") as SVGGElement | null;
+    if (!matrix || !element) return;
+
+    const local = svgPointFromMatrix(matrix, event.clientX, event.clientY);
+    const centerX = tool.x + tool.width / 2;
+    const centerY = tool.y + tool.height / 2;
+    svgRef.current?.setPointerCapture(event.pointerId);
+    rotateDragState.current = {
+      pointerId: event.pointerId,
+      tabId: activeTabId,
+      toolId: tool.id,
+      originalRotation: normalizeRotation(tool.rotation),
+      latestRotation: normalizeRotation(tool.rotation),
+      startAngle: angleDegreesFromCenter(centerX, centerY, local.x, local.y),
+      centerX,
+      centerY,
+      x: tool.x,
+      y: tool.y,
+      width: tool.width,
+      height: tool.height,
+      element,
+      inverseScreenMatrix: matrix,
     };
     setSelectedToolId(tool.id);
-    setDraggingToolId(tool.id);
+  };
+
+  const rotateToolFromContextMenu = (event: ReactMouseEvent<SVGGElement>, tool: ToolShape) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canEdit) {
+      triggerClonePrompt();
+      return;
+    }
+    if (objectShortcutUiBusy) return;
+
+    setSelectedToolId(tool.id);
+    rotateTool(activeTabId, tool.id, 45);
   };
 
   const moveToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -1573,6 +1933,25 @@ function App() {
       return;
     }
 
+    const rotating = rotateDragState.current;
+    if (rotating && rotating.pointerId === event.pointerId) {
+      const local = svgPointFromMatrix(rotating.inverseScreenMatrix, event.clientX, event.clientY);
+      const nextAngle = angleDegreesFromCenter(rotating.centerX, rotating.centerY, local.x, local.y);
+      const nextRotation = snapRotation(rotating.originalRotation + nextAngle - rotating.startAngle);
+      rotating.latestRotation = nextRotation;
+      rotating.element.setAttribute(
+        "transform",
+        toolTransform({
+          x: rotating.x,
+          y: rotating.y,
+          width: rotating.width,
+          height: rotating.height,
+          rotation: nextRotation,
+        }),
+      );
+      return;
+    }
+
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       const local = svgPointFromMatrix(current.inverseScreenMatrix, event.clientX, event.clientY);
@@ -1592,12 +1971,14 @@ function App() {
         }),
       );
 
-      if (current.deleteZoneCenter) {
-        const dist = Math.hypot(event.clientX - current.deleteZoneCenter.x, event.clientY - current.deleteZoneCenter.y);
-        const nextProximity = dist < 32 ? 1 : Math.max(0, 1 - dist / 300);
-        current.isOverDelete = nextProximity === 1;
-        paintDeleteZone(nextProximity);
-      }
+      const proximities = ACTION_ZONE_KINDS.reduce((next, kind) => {
+        next[kind] = actionZoneProximity(event.clientX, event.clientY, current.actionZoneCenters[kind]);
+        return next;
+      }, {} as Record<ActionZoneKind, ReturnType<typeof actionZoneProximity>>);
+      current.activeActionZone = ACTION_ZONE_DROP_PRIORITY.find((kind) => proximities[kind].isOver) ?? null;
+      ACTION_ZONE_KINDS.forEach((kind) => {
+        paintActionZoneKind(kind, proximities[kind].level);
+      });
       return;
     }
 
@@ -1612,26 +1993,35 @@ function App() {
   };
 
   const endToolDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rotating = rotateDragState.current;
+    if (rotating && rotating.pointerId === event.pointerId) {
+      rotateDragState.current = null;
+      svgRef.current?.releasePointerCapture(event.pointerId);
+      if (Math.abs(rotating.latestRotation - rotating.originalRotation) > 0.01) {
+        setToolRotation(rotating.tabId, rotating.toolId, rotating.latestRotation);
+      }
+    }
+
     const current = dragState.current;
     if (current && current.pointerId === event.pointerId) {
       dragState.current = null;
       svgRef.current?.releasePointerCapture(event.pointerId);
       setDraggingToolId(null);
 
-      if (current.isOverDelete) {
-        setTabs((currentTabs) =>
-          currentTabs.map((tab) => {
-            if (tab.id !== current.tabId) return tab;
-            return {
-              ...tab,
-              layout: {
-                ...tab.layout,
-                tools: tab.layout.tools.filter((tool) => tool.id !== current.toolId),
-              },
-            };
-          })
+      if (current.activeActionZone === "copy") {
+        current.element.setAttribute(
+          "transform",
+          toolTransform({
+            x: current.originalX,
+            y: current.originalY,
+            width: current.width,
+            height: current.height,
+            rotation: current.rotation,
+          }),
         );
-        markTabDirty(current.tabId, "Deleted tool");
+        duplicateTool(current.tabId, current.toolId);
+      } else if (current.activeActionZone === "delete") {
+        deleteTool(current.tabId, current.toolId);
       } else {
         const moved = Math.abs(current.latestX - current.originalX) > 0.01 || Math.abs(current.latestY - current.originalY) > 0.01;
         if (moved) {
@@ -1662,7 +2052,7 @@ function App() {
         deferredSyncFlushRef.current = false;
         scheduleSyncFlush(0);
       }
-      paintDeleteZone(0);
+      resetActionZones();
     }
 
     if (event.pointerType === "touch") {
@@ -1710,6 +2100,10 @@ function App() {
       if (shouldPromptForClone) triggerClonePrompt();
       return;
     }
+    if (renamingTool) {
+      toolRenameInputRef.current?.blur();
+    }
+    setSelectedToolId(null);
     if (shouldPromptForClone) {
       triggerClonePrompt();
     }
@@ -1762,6 +2156,208 @@ function App() {
     ];
   }, [activeTab, displayedTabs, draggingToolId, selectedTool]);
 
+  const hasEditableTool = useCallback((tabId: string, toolId: string) => {
+    if (!canEdit) return false;
+    if (pendingDeletedToolIdsRef.current.has(toolActionKey(tabId, toolId))) return false;
+    const sourceTab = tabsRef.current.find((tab) => tab.id === tabId);
+    return Boolean(sourceTab?.layout.tools.some((tool) => tool.id === toolId));
+  }, [canEdit]);
+
+  const updateTool = useCallback((tabId: string, toolId: string, updater: (tool: ToolShape) => ToolShape) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: tab.layout.tools.map((tool) => (tool.id === toolId ? updater(tool) : tool)),
+          },
+        };
+      }),
+    );
+    return true;
+  }, [hasEditableTool]);
+
+  const startToolRename = useCallback((tabId: string, toolId: string) => {
+    if (showAddTool || renamingTabId || !hasEditableTool(tabId, toolId)) return false;
+    const sourceTool = tabsRef.current
+      .find((tab) => tab.id === tabId)
+      ?.layout.tools.find((tool) => tool.id === toolId);
+    if (!sourceTool) return false;
+
+    setSelectedToolId(toolId);
+    setRenamingTool({ tabId, toolId });
+    setToolRenameDraft(sourceTool.name);
+    return true;
+  }, [hasEditableTool, renamingTabId, showAddTool]);
+
+  const cancelToolRename = useCallback(() => {
+    setRenamingTool(null);
+    setToolRenameDraft("");
+  }, []);
+
+  const renameTool = useCallback((tabId: string, toolId: string, nextName: string) => {
+    const trimmed = normalizeToolName(nextName);
+    const sourceTool = tabsRef.current
+      .find((tab) => tab.id === tabId)
+      ?.layout.tools.find((tool) => tool.id === toolId);
+
+    if (!trimmed || !sourceTool) {
+      cancelToolRename();
+      return false;
+    }
+
+    if (trimmed === sourceTool.name) {
+      cancelToolRename();
+      return true;
+    }
+
+    const renamed = updateTool(tabId, toolId, (tool) => ({
+      ...tool,
+      name: trimmed,
+    }));
+    cancelToolRename();
+    if (!renamed) return false;
+
+    markTabDirty(tabId, "Renamed tool");
+    pushDebugEvent("tool renamed");
+    return true;
+  }, [cancelToolRename, markTabDirty, pushDebugEvent, updateTool]);
+
+  const duplicateTool = useCallback((tabId: string, toolId: string) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    const nextId = makeShortId("tool", [
+      ...allToolIds(tabsRef.current),
+      ...Array.from(issuedToolIdsRef.current),
+    ]);
+    issuedToolIdsRef.current.add(nextId);
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        const sourceTool = tab.layout.tools.find((tool) => tool.id === toolId);
+        if (!sourceTool) return tab;
+
+        const nextPosition = clampToolPosition(
+          sourceTool,
+          viewBox.minX + viewBox.width / 2 - sourceTool.width / 2,
+          viewBox.minY + viewBox.height / 2 - sourceTool.height / 2,
+        );
+
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: [
+              ...tab.layout.tools,
+              {
+                ...sourceTool,
+                ...nextPosition,
+                id: nextId,
+              },
+            ],
+          },
+        };
+      }),
+    );
+    setSelectedToolId(nextId);
+    markTabDirty(tabId, ACTION_ZONES.copy.dirtyMessage);
+    pushDebugEvent("tool copied");
+    return true;
+  }, [hasEditableTool, markTabDirty, pushDebugEvent, viewBox]);
+
+  const deleteTool = useCallback((tabId: string, toolId: string) => {
+    if (!hasEditableTool(tabId, toolId)) return false;
+
+    pendingDeletedToolIdsRef.current.add(toolActionKey(tabId, toolId));
+    const pendingCallout = pendingKeyboardActivityCalloutRef.current;
+    if (pendingCallout?.tabId === tabId && pendingCallout.toolId === toolId) {
+      pendingKeyboardActivityCalloutRef.current = null;
+    }
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        return {
+          ...tab,
+          layout: {
+            ...tab.layout,
+            tools: tab.layout.tools.filter((tool) => tool.id !== toolId),
+          },
+        };
+      }),
+    );
+    setSelectedToolId((current) => (current === toolId ? null : current));
+    setRenamingTool((current) => (
+      current?.tabId === tabId && current.toolId === toolId ? null : current
+    ));
+    setToolRenameDraft((current) => (
+      renamingTool?.tabId === tabId && renamingTool.toolId === toolId ? "" : current
+    ));
+    setKeyboardActivityCallout((current) => (
+      current?.tabId === tabId && current.toolId === toolId ? null : current
+    ));
+    markTabDirty(tabId, ACTION_ZONES.delete.dirtyMessage);
+    pushDebugEvent("tool deleted");
+    return true;
+  }, [hasEditableTool, markTabDirty, pushDebugEvent, renamingTool]);
+
+  const setToolRotation = useCallback((tabId: string, toolId: string, rotation: number | ((tool: ToolShape) => number), debugMessage?: string) => {
+    const updated = updateTool(tabId, toolId, (tool) => ({
+      ...tool,
+      rotation: normalizeRotation(typeof rotation === "function" ? rotation(tool) : rotation),
+    }));
+    if (!updated) return false;
+
+    markTabDirty(tabId, "Rotated tool");
+    if (debugMessage) pushDebugEvent(debugMessage);
+    return true;
+  }, [markTabDirty, pushDebugEvent, updateTool]);
+
+  const rotateTool = useCallback((tabId: string, toolId: string, delta: number) => {
+    const rotated = setToolRotation(
+      tabId,
+      toolId,
+      (tool) => tool.rotation + delta,
+      `tool rotated ${delta < 0 ? "ccw" : "cw"}`,
+    );
+    if (!rotated) return false;
+
+    return true;
+  }, [setToolRotation]);
+
+  const cycleToolActivity = useCallback((tabId: string, toolId: string, step: 1 | -1) => {
+    const updated = updateTool(tabId, toolId, (tool) => {
+      const activity = nextActivity(tool.activity, step);
+      return {
+        ...tool,
+        activity,
+        color: ACTIVITY_COLORS[activity],
+      };
+    });
+    if (!updated) return false;
+
+    keyboardActivityCalloutSequenceRef.current += 1;
+    pendingKeyboardActivityCalloutRef.current = {
+      tabId,
+      toolId,
+      sequence: keyboardActivityCalloutSequenceRef.current,
+    };
+    markTabDirty(tabId, "Changed tool activity");
+    pushDebugEvent(`tool activity ${step < 0 ? "prev" : "next"}`);
+    return true;
+  }, [markTabDirty, pushDebugEvent, updateTool]);
+
+  duplicateSelectedToolRef.current = selectedTool ? () => duplicateTool(activeTabId, selectedTool.id) : null;
+  deleteSelectedToolRef.current = selectedTool ? () => deleteTool(activeTabId, selectedTool.id) : null;
+  rotateSelectedToolRef.current = selectedTool ? (delta) => rotateTool(activeTabId, selectedTool.id, delta) : null;
+  cycleSelectedToolActivityRef.current = selectedTool ? (step) => cycleToolActivity(activeTabId, selectedTool.id, step) : null;
+  renameSelectedToolRef.current = selectedTool ? () => startToolRename(activeTabId, selectedTool.id) : null;
+
   const handleCloneTab = async (source: LayoutTab) => {
     if (tabCreationLimitMessage || isClientAuthorTabLimitReached(tabsRef.current, localUserId)) {
       return;
@@ -1812,7 +2408,7 @@ function App() {
     pushDebugEvent("clone draft created");
 
     if (!localStorage.getItem("pstbg3shwavep-tutorial-seen")) {
-      setTutorialStep("zoom");
+      setTutorialStep("overview");
       localStorage.setItem("pstbg3shwavep-tutorial-seen", "true");
     }
   };
@@ -1932,6 +2528,22 @@ function App() {
     clone.setAttribute("width", String(FULL_VIEWBOX.width));
     clone.setAttribute("height", String(FULL_VIEWBOX.height));
 
+    if (renamingTool) {
+      const trimmed = normalizeToolName(toolRenameDraft);
+      if (trimmed) {
+        const renamedTool = Array.from(clone.querySelectorAll<SVGGElement>(".tool-node"))
+          .find((tool) => tool.getAttribute("data-tool-id") === renamingTool.toolId);
+        const label = Array.from(renamedTool?.children ?? [])
+          .find((child) => child.tagName.toLowerCase() === "text");
+        renamedTool?.setAttribute("inkscape:label", trimmed);
+        if (label) label.textContent = trimmed;
+      }
+    }
+
+    clone.querySelectorAll(".activity-keyboard-callout, .tool-rename-editor").forEach((node) => {
+      node.remove();
+    });
+
     const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
     style.textContent = `
       .infra-layer{display:${showInfra ? "block" : "none"}}
@@ -1959,7 +2571,10 @@ function App() {
       canvas.width = FULL_VIEWBOX.width;
       canvas.height = FULL_VIEWBOX.height;
       const context = canvas.getContext("2d");
-      if (!context) return;
+      if (!context) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       context.fillStyle = "#fbfaf6";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0);
@@ -1968,6 +2583,10 @@ function App() {
         URL.revokeObjectURL(url);
       }, "image/png");
       pushDebugEvent("export png");
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      pushDebugEvent("export png failed");
     };
     image.src = url;
   };
@@ -2087,10 +2706,10 @@ function App() {
             <div className="floorplan-controls" aria-label="Floorplan controls">
               <button
                 type="button"
-                className={tutorialStep === "add" ? "tutorial-highlight" : ""}
+                className={isTutorialActive ? "tutorial-highlight" : ""}
                 onClick={() => {
                   if (!canEdit) return;
-                  setShowAddTool((current) => (tutorialStep === "add" ? true : !current));
+                  setShowAddTool((current) => (isTutorialActive ? true : !current));
                 }}
                 disabled={!canEdit}
               >
@@ -2110,6 +2729,17 @@ function App() {
                   onChange={() => setSnapMode((current) => nextSnapMode(current))}
                 />
                 snap
+              </label>
+              <label className={`dims-control ${dimsMode}`}>
+                <input
+                  type="checkbox"
+                  className="dims-checkbox"
+                  checked={dimsMode !== "off"}
+                  aria-label={`dims: ${dimsModeLabel(dimsMode)}`}
+                  aria-checked={dimsMode === "all" ? "mixed" : dimsMode !== "off"}
+                  onChange={() => setDimsMode((current) => nextDimsMode(current))}
+                />
+                dims
               </label>
               <label>
                 <input type="checkbox" checked={showMezz} onChange={(event) => setShowMezz(event.target.checked)} />
@@ -2133,7 +2763,7 @@ function App() {
             </div>
           </div>
           {showAddTool && canEdit && (
-            <form className={`add-tool-form ${tutorialStep === "add" ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
+            <form className={`add-tool-form ${isTutorialActive ? "tutorial-highlight" : ""}`} onSubmit={handleAddToolSubmit} noValidate>
               <label>
                 {addToolErrors.name && <span className="error-bubble">req'd</span>}
                 <input
@@ -2231,6 +2861,7 @@ function App() {
           className={[
             "floorplan",
             isPanning ? "panning" : "",
+            isTutorialActive ? "tutorial-zooming" : "",
             gridDark ? "grid-dark" : "",
             showInfra ? "show-infra" : "",
             showMezz ? "show-mezz" : "",
@@ -2290,9 +2921,17 @@ function App() {
           <g id="layer-tools" {...{ "inkscape:label": "tools", "inkscape:groupmode": "layer" }}>
             {(activeTabIsStaticNow ? [] : activeTab.layout.tools).map((tool) => {
               const selected = tool.id === selectedToolId;
+              const showToolDims = dimsMode === "all" || (dimsMode === "selected" && selected && canEdit);
+              const showToolOverlay = showToolDims || (selected && canEdit);
+              const activityCallout = keyboardActivityCallout?.tabId === activeTabId && keyboardActivityCallout.toolId === tool.id
+                ? keyboardActivityCallout
+                : null;
+              const toolRenameBox = renamingTool?.tabId === activeTabId && renamingTool.toolId === tool.id
+                ? toolRenameEditorBox(tool)
+                : null;
               return (
+                <Fragment key={tool.id}>
                 <g
-                  key={tool.id}
                   id={tool.id}
                   {...{ "inkscape:label": tool.name }}
                   className={[
@@ -2307,22 +2946,27 @@ function App() {
                   data-tool-color={tool.color}
                   transform={toolTransform(tool)}
                   onPointerDown={(event) => startToolDrag(event, tool)}
+                  onContextMenu={(event) => rotateToolFromContextMenu(event, tool)}
                 >
                   <rect width={tool.width} height={tool.height} rx={0} fill={tool.color} fillOpacity={0.12} stroke={tool.color} strokeWidth={1.5} />
                   <text
+                    {...TOOL_LABEL_TEXT_PROPS}
                     x={tool.width / 2}
                     y={tool.height / 2}
-                    dominantBaseline="middle"
-                    textAnchor="middle"
-                    fill="#202427"
-                    fontSize={12}
-                    fontWeight={800}
-                    fontFamily="sans-serif"
                     transform={tool.height > tool.width ? `rotate(-90, ${tool.width / 2}, ${tool.height / 2})` : undefined}
-                    style={{ pointerEvents: "none", userSelect: "none" }}
                   >
                     {tool.name}
                   </text>
+                  {activityCallout && (
+                    <text
+                      {...TOOL_LABEL_TEXT_PROPS}
+                      className="activity-keyboard-callout"
+                      x={tool.width / 2}
+                      y={-10}
+                    >
+                      {activityCallout.activity}
+                    </text>
+                  )}
                   {tool.hazards && tool.hazards.length > 0 && (
                     <g id={`${tool.id}-hazards`} {...{ "inkscape:label": "hazards" }}>
                       {(() => {
@@ -2370,25 +3014,121 @@ function App() {
                       })()}
                     </g>
                   )}
+                  {showToolOverlay && (
+                    <g className="selected-tool-overlay" aria-label={`Selected controls for ${tool.name}`}>
+                      {showToolDims && (
+                        <g className="dimension-callouts" aria-hidden="true">
+                          <line className="dimension-extension" x1={0} y1={tool.height} x2={0} y2={tool.height + 11} />
+                          <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width} y2={tool.height + 11} />
+                          <line className="dimension-line" x1={0} y1={tool.height + 8} x2={tool.width} y2={tool.height + 8} />
+                          <path className="dimension-arrow" d={`M7 ${tool.height + 5} L0 ${tool.height + 8} L7 ${tool.height + 11}`} />
+                          <path className="dimension-arrow" d={`M${tool.width - 7} ${tool.height + 5} L${tool.width} ${tool.height + 8} L${tool.width - 7} ${tool.height + 11}`} />
+                          <text
+                            className="dimension-label"
+                            x={tool.width / 2}
+                            y={tool.height + 18}
+                            dominantBaseline="middle"
+                            textAnchor="middle"
+                          >
+                            {inchesToFeetInches(tool.width)}
+                          </text>
+
+                          <line className="dimension-extension" x1={tool.width} y1={0} x2={tool.width + 11} y2={0} />
+                          <line className="dimension-extension" x1={tool.width} y1={tool.height} x2={tool.width + 11} y2={tool.height} />
+                          <line className="dimension-line" x1={tool.width + 8} y1={0} x2={tool.width + 8} y2={tool.height} />
+                          <path className="dimension-arrow" d={`M${tool.width + 5} 7 L${tool.width + 8} 0 L${tool.width + 11} 7`} />
+                          <path className="dimension-arrow" d={`M${tool.width + 5} ${tool.height - 7} L${tool.width + 8} ${tool.height} L${tool.width + 11} ${tool.height - 7}`} />
+                          <text
+                            className="dimension-label"
+                            x={tool.width + 8}
+                            y={tool.height / 2}
+                            dominantBaseline="middle"
+                            textAnchor="middle"
+                            transform={`rotate(-90 ${tool.width + 8} ${tool.height / 2})`}
+                          >
+                            {inchesToFeetInches(tool.height)}
+                          </text>
+                        </g>
+                      )}
+
+                      {selected && canEdit && (
+                        <g
+                          className="rotate-handle"
+                          transform={`translate(${tool.width} 0)`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Rotate ${tool.name}`}
+                          onPointerDown={(event) => startToolRotate(event, tool)}
+                        >
+                          <circle className="rotate-hit-area" cx={0} cy={0} r={10} />
+                          <path d="M3.5 -4.5 v4 h-4" />
+                          <path d="M3 2.8 A5 5 0 1 1 1.9 -4.2" />
+                        </g>
+                      )}
+                    </g>
+                  )}
                 </g>
+                  {toolRenameBox && (
+                    <foreignObject
+                      className="tool-rename-editor"
+                      x={toolRenameBox.x}
+                      y={toolRenameBox.y}
+                      width={toolRenameBox.width}
+                      height={toolRenameBox.height}
+                    >
+                      <div className="tool-rename-shell">
+                        <input
+                          ref={toolRenameInputRef}
+                          className="tool-rename-input"
+                          value={toolRenameDraft}
+                          autoFocus
+                          maxLength={MAX_TOOL_NAME_CHARS}
+                          aria-label={`Rename ${tool.name}`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => event.stopPropagation()}
+                          onWheel={(event) => event.stopPropagation()}
+                          onChange={(event) => setToolRenameDraft(event.target.value.slice(0, MAX_TOOL_NAME_CHARS))}
+                          onBlur={() => renameTool(activeTabId, tool.id, toolRenameDraft)}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              renameTool(activeTabId, tool.id, toolRenameDraft);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              cancelToolRename();
+                            }
+                          }}
+                        />
+                      </div>
+                    </foreignObject>
+                  )}
+                </Fragment>
               );
             })}
           </g>
         </svg>
         {canEdit && (
-          <div
-            ref={deleteZoneRef}
-            className={`delete-zone ${tutorialStep === "delete" ? "tutorial-pulse" : ""}`}
-            aria-label="Drop here to delete"
-          >
-            <svg viewBox="0 0 24 24">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
-          </div>
+          <>
+            {ACTION_ZONE_KINDS.map((kind) => {
+              const zone = ACTION_ZONES[kind];
+              return (
+                <div
+                  key={kind}
+                  ref={(element) => setActionZoneElement(kind, element)}
+                  className={[
+                    "action-zone",
+                    zone.className,
+                    isTutorialActive ? "tutorial-pulse" : "",
+                  ].filter(Boolean).join(" ")}
+                  aria-label={zone.ariaLabel}
+                >
+                  <ActionZoneIcon kind={kind} />
+                </div>
+              );
+            })}
+          </>
         )}
       </section>
 
@@ -2400,7 +3140,7 @@ function App() {
           const isOwnTab = !isNow && isUserTab;
           const tabClassName = `sheet-tab${isActive ? " active" : ""}`;
           const isConfirmingDelete = confirmingDeleteTabId === tab.id;
-          const isRenameStep = tutorialStep === "rename" && isActive;
+          const isRenameStep = isTutorialActive && isActive;
           const isClonePrompted = clonePrompt?.tabId === tab.id;
 
           return (
@@ -2482,88 +3222,71 @@ function App() {
       </nav>
 
       {tutorialStep && (
-        <div className="tutorial-overlay">
-          <div className="tutorial-tip">
-            {tutorialStep === "zoom" && (
-              <>
-                <div className="tutorial-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="11" cy="11" r="8" />
-                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                    <line x1="8" y1="11" x2="14" y2="11" />
-                    <line x1="11" y1="8" x2="11" y2="14" />
-                  </svg>
-                </div>
-                <h3>Scroll to zoom</h3>
-                <p>Use your mouse wheel to zoom in and out of the drawing.</p>
-              </>
-            )}
-            {tutorialStep === "rotate" && (
-              <>
-                <div className="tutorial-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M23 4v6h-6" />
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                  </svg>
-                </div>
-                <h3>Right-click to rotate</h3>
-                <p>Right-click (or Ctrl+Click) any object to rotate it 45° clockwise.</p>
-              </>
-            )}
-            {tutorialStep === "delete" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "#ef4444" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 6h18" />
-                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
-                </div>
-                <h3>Drag to delete</h3>
-                <p>Drag any object onto the garbage can at the bottom to remove it.</p>
-              </>
-            )}
-            {tutorialStep === "add" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "var(--accent)" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                </div>
-                <h3>Add new tools</h3>
-                <p>Bring up the Add panel to spawn new equipment.</p>
-              </>
-            )}
-            {tutorialStep === "rename" && (
-              <>
-                <div className="tutorial-icon" style={{ color: "var(--accent)" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M4 20h4l11-11-4-4L4 16v4Z" />
-                    <path d="m13 7 4 4" />
-                  </svg>
-                </div>
-                <h3>Rename this tab and create your Protospace!</h3>
-              </>
-            )}
-            <div className="tutorial-progress-wrap">
-              <div className="tutorial-progress-bar continuous" />
-              <div className="tutorial-markers" style={{ position: "relative", height: "8px" }}>
-                {TUTORIAL_STEPS.map((step, i) => {
-                  const currentIndex = TUTORIAL_STEPS.indexOf(tutorialStep);
-                  // Right to left placement: Zoom at 80%, Rename at 0%
-                  const leftPercent = (4 - i) * 20;
-                  return (
-                    <div
-                      key={step}
-                      className={`tutorial-marker ${i >= currentIndex ? "filled" : ""}`}
-                      style={{ position: "absolute", left: `${leftPercent}%`, transform: "translateX(-50%)" }}
-                      title={step}
-                    />
-                  );
-                })}
+        <div
+          className="tutorial-overlay"
+          aria-label="Board tutorial"
+          onClick={() => {
+            setTutorialStep(null);
+            setShowAddTool(false);
+          }}
+        >
+          <div className="tutorial-tip scroll-tip">
+            <div className="tutorial-zoom-callout" aria-hidden="true">
+              <div className="tutorial-mouse">
+                <span />
+              </div>
+              <div className="tutorial-zoom-rings">
+                <span />
+                <span />
               </div>
             </div>
+            <strong>Scroll</strong>
+            <span>zoom the floorplan</span>
+          </div>
+
+          <div className="tutorial-tip add-tip">
+            <strong>Add tools</strong>
+            <span>spawn objects onto the floor</span>
+          </div>
+
+          <div className="tutorial-tip drop-tip">
+            <strong>Drop here</strong>
+            <span>to delete or copy</span>
+          </div>
+
+          <div className="tutorial-tip shortcuts-tip">
+            <strong>Keyboard shortcuts</strong>
+            <span>With an object selected,</span>
+            <dl className="tutorial-shortcuts">
+              <div>
+                <dt>Insert</dt>
+                <dd>copy</dd>
+              </div>
+              <div>
+                <dt>Del/Bkspc</dt>
+                <dd>delete</dd>
+              </div>
+              <div>
+                <dt>PgUp/PgDn</dt>
+                <dd>rotate</dd>
+              </div>
+              <div>
+                <dt>Home/End</dt>
+                <dd>activity</dd>
+              </div>
+              <div>
+                <dt>Enter</dt>
+                <dd>rename</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div
+            className="tutorial-tip rename-tip"
+            style={renameTipAnchor ? { left: renameTipAnchor.left, top: renameTipAnchor.top } : undefined}
+          >
+            <strong>Rename tab</strong>
+            <span>label your new space</span>
           </div>
         </div>
       )}

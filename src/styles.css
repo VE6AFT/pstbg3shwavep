@@ -395,7 +395,8 @@ button {
   cursor: pointer;
 }
 
-.snap-control {
+.snap-control,
+.dims-control {
   cursor: pointer;
 }
 
@@ -426,7 +427,8 @@ button {
   transform: scale(1);
 }
 
-.snap-control.center .snap-checkbox::before {
+.snap-control.center .snap-checkbox::before,
+.dims-control.all .dims-checkbox::before {
   content: "X";
   width: auto;
   height: auto;
@@ -478,7 +480,8 @@ button {
 }
 
 .add-tool-form input[type="text"],
-.add-tool-form select {
+.add-tool-form select,
+.tool-rename-input {
   padding: 2px 4px;
   border: 1px solid rgba(105, 112, 116, 0.28);
   border-radius: 4px;
@@ -488,6 +491,38 @@ button {
   font-size: 0.75rem;
   box-sizing: border-box;
   width: 100%;
+}
+
+.tool-rename-editor {
+  overflow: visible;
+  pointer-events: auto;
+}
+
+.tool-rename-shell {
+  width: 100%;
+  height: 100%;
+}
+
+.tool-rename-input {
+  height: 100%;
+  border-color: rgba(34, 113, 129, 0.45);
+  background: rgba(255, 255, 255, 0.9);
+  color: #202427;
+  caret-color: var(--accent);
+  font-family: sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  outline: 0;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+}
+
+.tool-rename-input:focus {
+  border-color: var(--accent);
 }
 
 .add-tool-form .row {
@@ -540,13 +575,14 @@ button {
   cursor: default;
 }
 
-.delete-zone {
-  --delete-zone-center: translateX(-50%);
-  --delete-zone-level: 0;
+.action-zone {
+  --action-zone-center: translateX(-50%);
+  --action-zone-level: 0;
+  --action-zone-opacity: 0.4;
+  --action-zone-resting-opacity: 0.4;
   position: absolute;
   bottom: 20px;
-  left: 50%;
-  transform: var(--delete-zone-center);
+  transform: var(--action-zone-center);
   width: 48px;
   height: 48px;
   background: #cbd5e1;
@@ -556,24 +592,38 @@ button {
   border-radius: 999px;
   pointer-events: none;
   user-select: none;
-  opacity: 0.15;
+  opacity: max(var(--action-zone-resting-opacity), var(--action-zone-opacity));
   transition: opacity 0.15s ease, transform 0.1s ease;
   z-index: 100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.delete-zone::before {
+.action-zone.delete {
+  --action-zone-active: #ef4444;
+  --action-zone-pulse-shadow: rgba(239, 68, 68, 0.42);
+  --action-zone-pulse-fade: rgba(239, 68, 68, 0);
+  left: calc(50% - 72px);
+}
+
+.action-zone.copy {
+  --action-zone-active: var(--accent);
+  --action-zone-pulse-shadow: rgba(34, 113, 129, 0.42);
+  --action-zone-pulse-fade: rgba(34, 113, 129, 0);
+  left: calc(50% + 72px);
+}
+
+.action-zone::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: #ef4444;
-  opacity: var(--delete-zone-level);
+  background: var(--action-zone-active);
+  opacity: var(--action-zone-level);
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.delete-zone svg {
+.action-zone svg {
   position: relative;
   z-index: 1;
   width: 24px;
@@ -585,30 +635,30 @@ button {
   stroke-linejoin: round;
 }
 
-.delete-zone.shaking {
-  animation: bin-shake 0.15s ease-in-out infinite;
-  --delete-zone-level: 1;
+.action-zone.shaking {
+  animation: action-zone-shake 0.15s ease-in-out infinite;
+  --action-zone-level: 1;
 }
 
-@keyframes bin-shake {
+@keyframes action-zone-shake {
 
   0%,
   100% {
-    transform: var(--delete-zone-center) rotate(0deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(0deg) scale(1.1);
   }
 
   25% {
-    transform: var(--delete-zone-center) rotate(8deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(8deg) scale(1.1);
   }
 
   75% {
-    transform: var(--delete-zone-center) rotate(-8deg) scale(1.1);
+    transform: var(--action-zone-center) rotate(-8deg) scale(1.1);
   }
 }
 
 /* Brighten when actively dragging something */
-.workspace:has(.dragging) .delete-zone {
-  opacity: 1;
+.workspace:has(.dragging) .action-zone {
+  --action-zone-resting-opacity: 0.4;
   pointer-events: all;
 }
 
@@ -688,6 +738,83 @@ button {
   cursor: grabbing;
 }
 
+.tool-node.selected>rect {
+  stroke-width: 2.5;
+  stroke-opacity: 0.95;
+}
+
+.selected-tool-overlay {
+  color: #202427;
+  pointer-events: none;
+}
+
+.dimension-line,
+.dimension-extension {
+  fill: none;
+  stroke: rgba(32, 36, 39, 0.62);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dimension-line {
+  stroke-width: 0.7;
+}
+
+.dimension-extension {
+  stroke-width: 0.55;
+  stroke-dasharray: 2 3;
+}
+
+.dimension-arrow {
+  fill: none;
+  stroke: rgba(32, 36, 39, 0.62);
+  stroke-width: 0.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dimension-label {
+  fill: #202427;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  pointer-events: none;
+}
+
+.rotate-handle {
+  pointer-events: auto;
+  cursor: grab;
+  color: rgba(32, 36, 39, 0.72);
+}
+
+.rotate-handle:active {
+  cursor: grabbing;
+}
+
+.rotate-hit-area {
+  fill: transparent;
+  stroke: none;
+}
+
+.rotate-handle path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.rotate-handle:hover,
+.rotate-handle:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .tool-node foreignObject {
   overflow: hidden;
   pointer-events: none;
@@ -719,6 +846,13 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   pointer-events: none;
+}
+
+.tool-node .dimension-label {
+  fill: #202427;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: none;
 }
 
 .sheet-tabs {
@@ -859,29 +993,19 @@ button {
 }
 
 .sheet-tab-wrap.deleting .sheet-tab {
-  animation: tab-delete-vanish 3.2s ease-in forwards;
+  animation: tab-delete-vanish 2.2s ease-in forwards;
 }
 
 .delete-tab.confirming {
   z-index: 14;
   transition: none;
   animation:
-    tab-delete-grow 3.2s ease-in forwards,
+    tab-delete-countdown 2.2s linear forwards,
     tab-delete-wiggle 0.12s steps(2, end) infinite;
 }
 
-@keyframes tab-delete-grow {
+@keyframes tab-delete-countdown {
   0% {
-    top: 33px;
-    width: 15px;
-    height: 15px;
-    font-size: 0.74rem;
-    opacity: 1;
-    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0);
-  }
-
-  84%,
-  99% {
     top: 26px;
     width: 28px;
     height: 28px;
@@ -890,17 +1014,27 @@ button {
     box-shadow: 0 0 0 8px rgba(159, 64, 59, 0.08);
   }
 
+  99% {
+    top: 35px;
+    width: 9px;
+    height: 9px;
+    font-size: 0.45rem;
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0);
+  }
+
   100% {
-    top: 26px;
-    width: 28px;
-    height: 28px;
-    font-size: 1.35rem;
+    top: 35px;
+    width: 9px;
+    height: 9px;
+    font-size: 0.45rem;
     opacity: 0;
-    box-shadow: 0 0 0 18px rgba(159, 64, 59, 0);
+    box-shadow: 0 0 0 10px rgba(159, 64, 59, 0);
   }
 }
 
 @keyframes tab-delete-wiggle {
+
   0%,
   100% {
     transform: translateX(-50%) translateY(0) translateX(-3px) rotate(-8deg);
@@ -912,17 +1046,14 @@ button {
 }
 
 @keyframes tab-delete-vanish {
+
   0%,
   99% {
     opacity: 1;
-    filter: none;
-    transform: translateY(0) scale(1);
   }
 
   100% {
     opacity: 0;
-    filter: saturate(1.6);
-    transform: translateY(4px) scale(0.92);
   }
 }
 
@@ -1015,39 +1146,23 @@ button {
   }
 }
 
-.delete-zone.tutorial-pulse {
-  animation: delete-pulse 1s ease-in-out infinite;
+.action-zone.tutorial-pulse {
+  --action-zone-level: 1;
+  animation: action-zone-pulse 1s ease-in-out infinite;
   opacity: 1 !important;
 }
 
-@keyframes delete-pulse {
+@keyframes action-zone-pulse {
 
   0%,
   100% {
-    transform: var(--delete-zone-center) scale(1);
-    box-shadow: 0 0 0 0 rgba(159, 64, 59, 0.4);
+    transform: var(--action-zone-center) scale(1);
+    box-shadow: 0 0 0 0 var(--action-zone-pulse-shadow);
   }
 
   50% {
-    transform: var(--delete-zone-center) scale(1.3);
-    box-shadow: 0 0 20px 10px rgba(159, 64, 59, 0);
-  }
-}
-
-.add-tool-form.tutorial-glow {
-  animation: form-glow 2s ease-in-out infinite;
-  border: 2px solid var(--accent);
-}
-
-@keyframes form-glow {
-
-  0%,
-  100% {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  }
-
-  50% {
-    box-shadow: 0 0 25px 5px rgba(34, 113, 129, 0.3);
+    transform: var(--action-zone-center) scale(1.3);
+    box-shadow: 0 0 20px 10px var(--action-zone-pulse-fade);
   }
 }
 
@@ -1055,37 +1170,134 @@ button {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  pointer-events: none;
+  pointer-events: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding: 18px;
+  cursor: pointer;
 }
 
 .tutorial-tip {
-  pointer-events: auto;
-  background: #ffffff;
-  border: 1px solid var(--line);
+  --tip-accent: var(--accent);
+  --tip-rgb: 34, 113, 129;
+  --tip-base-transform: translate(0, 0);
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, #ffffff 100%, rgba(var(--tip-rgb), 0.13) 100%);
+  border: 1px solid rgba(var(--tip-rgb), 0.34);
   border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  padding: 12px 18px;
+  box-shadow:
+    0 16px 38px rgba(32, 36, 39, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  max-width: 320px;
+  gap: 6px;
+  width: auto;
+  min-width: 160px;
   text-align: center;
   animation: tip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.tutorial-tip::before,
+.tutorial-tip::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 5px;
+  background: var(--tip-accent);
+}
+
+.tutorial-tip::before {
+  inset: 0 auto 0 0;
+}
+
+.tutorial-tip::after {
+  inset: 0 0 0 auto;
+}
+
+.scroll-tip {
+  --tip-base-transform: translate(-50%, -50%);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 24px 30px;
+  min-width: 240px;
+}
+
+.add-tip,
+.drop-tip,
+.shortcuts-tip,
+.rename-tip {
+  animation:
+    tip-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    tip-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tip-pulse {
+
+  0%,
+  100% {
+    box-shadow:
+      0 16px 38px rgba(32, 36, 39, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 0 0 0 rgba(var(--tip-rgb), 0);
+    border-color: rgba(var(--tip-rgb), 0.34);
+  }
+
+  50% {
+    box-shadow:
+      0 16px 38px rgba(32, 36, 39, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 0 0 7px rgba(var(--tip-rgb), 0.2);
+    border-color: rgba(var(--tip-rgb), 0.72);
+  }
+}
+
+.add-tip {
+  bottom: 310px;
+  left: 120px;
+}
+
+.drop-tip {
+  --tip-base-transform: translateX(-50%);
+  bottom: 150px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.shortcuts-tip {
+  top: 28%;
+  right: 28px;
+  align-items: stretch;
+  min-width: 230px;
+  max-width: 260px;
+  text-align: left;
+}
+
+.rename-tip {
+  --tip-base-transform: translate(-35%, -100%);
+  position: fixed;
+  top: calc(100vh - 76px);
+  left: 250px;
+  bottom: auto;
+  transform: translate(-35%, -100%);
+  z-index: 1001;
 }
 
 @keyframes tip-in {
   from {
     opacity: 0;
-    transform: translateY(20px) scale(0.9);
+    transform: var(--tip-base-transform) translateY(16px) scale(0.94);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: var(--tip-base-transform) translateY(0) scale(1);
   }
 }
 
@@ -1093,20 +1305,6 @@ button {
   margin: 0;
   font-size: 1.2rem;
   color: var(--accent);
-}
-
-.tutorial-tip p {
-  margin: 0;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  color: #4b5563;
-}
-
-.tutorial-icon {
-  width: 64px;
-  height: 64px;
-  color: var(--accent);
-  margin-bottom: 8px;
 }
 
 .tutorial-highlight {
@@ -1127,46 +1325,141 @@ button {
   }
 }
 
-.tutorial-progress-wrap {
-  margin-top: 16px;
-  width: 100%;
+.floorplan.tutorial-zooming {
+  transform-origin: center center;
+  animation: floorplan-zoom-demo 2.8s ease-in-out infinite;
 }
 
-.tutorial-progress-bar {
-  height: 4px;
-  background: var(--accent);
-  width: 100%;
-  transform-origin: left;
-  animation: tutorial-total-timer 25s linear forwards;
+@keyframes floorplan-zoom-demo {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.025);
+  }
+
+  70% {
+    transform: scale(0.992);
+  }
 }
 
-@keyframes tutorial-total-timer {
+.tutorial-zoom-callout {
+  position: relative;
+  width: 70px;
+  height: 48px;
+  color: var(--tip-accent);
+}
+
+.tutorial-mouse {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 26px;
+  height: 40px;
+  border: 2px solid currentColor;
+  border-radius: 14px;
+  transform: translateX(-50%);
+  background: #ffffff;
+}
+
+.tutorial-mouse span {
+  position: absolute;
+  left: 50%;
+  top: 7px;
+  width: 4px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%);
+  animation: tutorial-wheel 1.4s ease-in-out infinite;
+}
+
+.tutorial-zoom-rings span {
+  position: absolute;
+  inset: 8px 18px 0;
+  border: 2px solid rgba(34, 113, 129, 0.28);
+  border-radius: 999px;
+  animation: tutorial-ring 2.8s ease-out infinite;
+}
+
+.tutorial-zoom-rings span:nth-child(2) {
+  animation-delay: 1.4s;
+}
+
+@keyframes tutorial-wheel {
+
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+    opacity: 0.95;
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(12px);
+    opacity: 0.45;
+  }
+}
+
+@keyframes tutorial-ring {
   from {
-    transform: scaleX(1);
+    transform: scale(0.72);
+    opacity: 0.6;
   }
 
   to {
-    transform: scaleX(0);
+    transform: scale(1.7);
+    opacity: 0;
   }
 }
 
-.tutorial-markers {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 6px;
-  padding: 0 4px;
+.tutorial-tip strong {
+  color: var(--tip-accent);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
-.tutorial-marker {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #e2e8f0;
-  transition: background 0.3s ease;
+.tutorial-tip span {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
-.tutorial-marker.filled {
-  background: var(--accent);
+.tutorial-shortcuts {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.tutorial-shortcuts div {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.tutorial-shortcuts dt {
+  padding: 2px 6px;
+  border: 1px solid rgba(34, 113, 129, 0.28);
+  border-radius: 5px;
+  background: rgba(34, 113, 129, 0.08);
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.tutorial-shortcuts dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  font-weight: 800;
 }
 
 .clone-tab.always-visible,
@@ -1200,4 +1493,30 @@ button {
 .rename-tab.tutorial-highlight {
   border: 2px solid var(--accent);
   box-shadow: 0 0 10px var(--accent);
+}
+
+@media (max-width: 640px) {
+  .tutorial-overlay {
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .tutorial-tip,
+  .scroll-tip,
+  .add-tip,
+  .drop-tip,
+  .shortcuts-tip,
+  .rename-tip {
+    position: relative;
+    inset: auto;
+    left: auto;
+    right: auto;
+    top: auto;
+    bottom: auto;
+    width: min(280px, calc(100vw - 24px));
+    min-width: 0;
+    --tip-base-transform: translate(0, 0);
+  }
 }
